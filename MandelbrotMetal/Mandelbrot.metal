@@ -15,7 +15,7 @@ struct MandelbrotUniforms {
     int    maxIt;    // iterations
     uint2  size;     // output size in pixels
     int    pixelStep;// block size for progressive rendering
-    int    palette;  // 0=HSV, 1=Fire, 2=Ocean
+    int    palette;  // 0=HSV, 1=Fire, 2=Ocean, 3=LUT
     int    deepMode; // 0=off, 1=on
     float2 originHi; // deep zoom hi components (re, im)
     float2 originLo; // deep zoom lo components (re, im)
@@ -51,6 +51,11 @@ inline DS ds_mul_f(DS a, float b) {
     return (DS){rhi, rlo};
 }
 inline float ds_to_float(DS a) { return a.hi + a.lo; }
+
+// Simple complex helpers
+inline float2 cadd(float2 a, float2 b) { return float2(a.x + b.x, a.y + b.y); }
+inline float2 cmul(float2 a, float2 b) { return float2(a.x*b.x - a.y*b.y, a.x*b.y + a.y*b.x); }
+inline float  csqmag(float2 a) { return dot(a, a); }
 
 // Palettes
 inline float3 palette_hsv(float t) {
@@ -110,24 +115,19 @@ kernel void mandelbrotKernel(
     const int maxIt = u.maxIt;
     float zr, zi, zr2, zi2;
 
-    if (u.perturbation != 0) {
-        // Perturbation delta iteration: w_{n+1} = 2*z_n*w_n + w_n^2 + (c - c0)
-        float wr = 0.0f, wi = 0.0f; // w_0 = 0
+    if (u.perturbation != 0 && refOrbit != nullptr) {
+        // First-order perturbation around reference orbit at c0
+        // CPU builds refOrbit[i] = z_{i+1} starting from z0 = 0
+        float2 dz = float2(0.0, 0.0); // dz_0 = 0
+        float2 delta = float2(dcr, dci);
         for (it = 0; it < maxIt; ++it) {
-            float2 zn = refOrbit[it];
-            // w^2
-            float w2r = wr*wr - wi*wi;
-            float w2i = 2.0f*wr*wi;
-            // 2*z_n*w
-            float twr = 2.0f * (zn.x * wr - zn.y * wi);
-            float twi = 2.0f * (zn.x * wi + zn.y * wr);
-            // w_{n+1}
-            wr = twr + w2r + dcr;
-            wi = twi + w2i + dci;
-            // Evaluate z_n + w_n
-            zr = zn.x + wr;
-            zi = zn.y + wi;
-            zr2 = zr*zr; zi2 = zi*zi;
+            // z_ref_n = (i == 0) ? 0 : refOrbit[i-1]
+            float2 zref_n = (it == 0) ? float2(0.0, 0.0) : refOrbit[it - 1];
+            // dz_{n+1} = 2*z_ref_n*dz_n + delta
+            dz = cadd(cmul(float2(2.0, 0.0), cmul(zref_n, dz)), delta);
+            // z_n = z_ref_n + dz_n  (use for bailout & coloring)
+            float2 z_n = cadd(zref_n, dz);
+            zr = z_n.x; zi = z_n.y; zr2 = zr*zr; zi2 = zi*zi;
             if (zr2 + zi2 > 4.0f) { break; }
         }
     } else {
@@ -168,14 +168,6 @@ kernel void mandelbrotKernel(
                              float3(0.0, 0.25, 0.20));
     }
 
-    // Fill the block
-    for (int oy = 0; oy < stepPix; ++oy) {
-        uint yy = baseY + (uint)oy;
-        if (yy >= u.size.y) break;
-        for (int ox = 0; ox < stepPix; ++ox) {
-            uint xx = baseX + (uint)ox;
-            if (xx >= u.size.x) break;
-            outTex.write(float4(rgb, 1.0), uint2(xx, yy));
-        }
-    }
+    // Single-pixel write (renderer uses pixelStep == 1)
+    outTex.write(float4(rgb, 1.0), uint2(baseX, baseY));
 }

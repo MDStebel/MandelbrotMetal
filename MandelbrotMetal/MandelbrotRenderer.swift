@@ -7,8 +7,13 @@
 
 import Foundation
 import MetalKit
-import simd
 import UIKit
+
+import simd
+
+extension Notification.Name {
+    static let MandelbrotRendererFallback = Notification.Name("MandelbrotRendererFallback")
+}
 
 struct MandelbrotUniforms {
     var origin: SIMD2<Float>
@@ -51,8 +56,15 @@ final class MandelbrotRenderer: NSObject, MTKViewDelegate {
         perturbation: 0,
         c0: .zero
     )
+    // Auto precision / perturbation tracking
+    private var lastC0Used: SIMD2<Double>? = nil
+    private var lastInvScale: Double = .infinity
+    private let deepZoomThreshold: Double = 1.0e6   // auto-enable deep mode beyond this
+    private let recenterPixels: Double = 96.0       // rebuild perturbation if ref drifts by this many pixels
+    /// Interactive mode: keep pixelStep at 1 (full resolution) to avoid pixelation while zooming.
+    /// We still reduce iterations a bit during interaction for responsiveness.
     func setInteractive(_ on: Bool, baseIterations: Int) {
-        uniforms.pixelStep = on ? 2 : 1
+        uniforms.pixelStep = 1 // do NOT downsample; downsampling causes visible pixelation while zooming
         uniforms.maxIt = Int32(on ? max(50, baseIterations/2) : baseIterations)
         needsRender = true
     }
@@ -113,26 +125,30 @@ final class MandelbrotRenderer: NSObject, MTKViewDelegate {
         guard wD.isFinite, hD.isFinite else { return }
         let pixelW = max(1, Int(wD.rounded()))
         let pixelH = max(1, Int(hD.rounded()))
-        
+
         uniforms.size = SIMD2<UInt32>(UInt32(pixelW), UInt32(pixelH))
         uniforms.maxIt = Int32(max(1, maxIterations))
-        
+        uniforms.pixelStep = 1 // force full-resolution sampling when updating the viewport
+
         let invScale = 1.0 / max(1e-9, scalePixelsPerUnit)
+        // Auto-enable deep-precision math past threshold to avoid precision banding at huge zooms
+        if scalePixelsPerUnit >= deepZoomThreshold { uniforms.deepMode = 1 }
+
         let halfW = 0.5 * Double(pixelW)
         let halfH = 0.5 * Double(pixelH)
         let originX = center.x - halfW * invScale
         let originY = center.y - halfH * invScale
-        
+
         uniforms.origin = SIMD2<Float>(Float(originX), Float(originY))
         uniforms.step   = SIMD2<Float>(Float(invScale), Float(invScale))
-        
+
         // Compute double-single split values for origin and step
         func splitDoubleToHiLo(_ d: Double) -> (Float, Float) {
             let hi = Float(d)
             let lo = Float(d - Double(hi))
             return (hi, lo)
         }
-        
+
         let (oRx, oRxLo) = splitDoubleToHiLo(originX)
         let (oRy, oRyLo) = splitDoubleToHiLo(originY)
         let (sX,  sXLo)  = splitDoubleToHiLo(invScale)
@@ -141,7 +157,31 @@ final class MandelbrotRenderer: NSObject, MTKViewDelegate {
         uniforms.originLo = SIMD2<Float>(oRxLo, oRyLo)
         uniforms.stepHi   = SIMD2<Float>(sX, sY)
         uniforms.stepLo   = SIMD2<Float>(sXLo, sYLo)
-        
+
+        // Heuristic: if perturbation is on and the current reference has drifted by N pixels or zoom changed a lot,
+        // rebuild the reference orbit to keep deltas small and prevent blocky artifacts at extreme zoom.
+        if uniforms.perturbation != 0 {
+            let c0x = Double(uniforms.origin.x) + Double(uniforms.size.x) * 0.5 * Double(uniforms.step.x)
+            let c0y = Double(uniforms.origin.y) + Double(uniforms.size.y) * 0.5 * Double(uniforms.step.y)
+            let currentC0 = SIMD2<Double>(c0x, c0y)
+            let needZoomRefresh = !lastInvScale.isFinite || abs(invScale - lastInvScale) / max(1e-15, abs(lastInvScale)) > 0.25
+            var needDriftRefresh = false
+            if let last = lastC0Used {
+                let dx = abs(currentC0.x - last.x)
+                let dy = abs(currentC0.y - last.y)
+                // Convert drift threshold from pixels to complex units
+                let driftThresh = recenterPixels * invScale
+                needDriftRefresh = (dx > driftThresh) || (dy > driftThresh)
+            } else {
+                needDriftRefresh = true
+            }
+            if needZoomRefresh || needDriftRefresh {
+                recenterReference(atComplex: currentC0, iterations: Int(uniforms.maxIt))
+                lastC0Used = currentC0
+                lastInvScale = invScale
+            }
+        }
+
         allocateTextureIfNeeded(width: pixelW, height: pixelH)
         rebuildReferenceOrbitIfNeeded()
         needsRender = true
@@ -210,6 +250,8 @@ final class MandelbrotRenderer: NSObject, MTKViewDelegate {
         }
         
         print("DRAW tick: outTex=\(outTex.width)x\(outTex.height) drawable=\(drawable.texture.width)x\(drawable.texture.height) uniforms.size=\(uniforms.size) needsRender=\(needsRender)")
+        // Validate that required resources are available; otherwise, gracefully adjust uniforms
+        validateBindingsAndFallback()
         if let enc = cmd.makeComputeCommandEncoder() {
             enc.setComputePipelineState(pipeline)
             var u = uniforms
@@ -260,6 +302,7 @@ final class MandelbrotRenderer: NSObject, MTKViewDelegate {
     // Enable or disable deep zoom (double-single precision coordinate mapping)
     func setDeepZoom(_ on: Bool) {
         uniforms.deepMode = on ? 1 : 0
+        // Do not modify lastInvScale here; it is updated during viewport changes
         needsRender = true
     }
     
@@ -576,6 +619,24 @@ final class MandelbrotRenderer: NSObject, MTKViewDelegate {
     }
     
     // MARK: - Helpers
+
+    /// Ensure required GPU resources are bound for the selected modes. If not, gracefully fall back.
+    private func validateBindingsAndFallback() {
+        // If perturbation is enabled but the reference orbit buffer isn't ready, fall back to classic.
+        if uniforms.perturbation != 0 && refOrbitBuffer == nil {
+            let msg = "Perturbation off: no reference orbit bound"
+            print("[Renderer] \(msg)")
+            uniforms.perturbation = 0
+            NotificationCenter.default.post(name: .MandelbrotRendererFallback, object: self, userInfo: ["reason": msg])
+        }
+        // If LUT palette is selected but we don't have a palette texture yet, fall back to HSV.
+        if uniforms.palette == 3 && paletteTexture == nil {
+            let msg = "LUT unavailable: fell back to HSV"
+            print("[Renderer] \(msg)")
+            uniforms.palette = 0
+            NotificationCenter.default.post(name: .MandelbrotRendererFallback, object: self, userInfo: ["reason": msg])
+        }
+    }
     private func ensureDummyOrbitBuffer() -> MTLBuffer? {
         if let b = dummyOrbitBuffer { return b }
         var zero = SIMD2<Float>(repeating: 0)
@@ -623,7 +684,7 @@ final class MandelbrotRenderer: NSObject, MTKViewDelegate {
         let c0x = Double(uniforms.origin.x) + Double(w) * 0.5 * Double(uniforms.step.x)
         let c0y = Double(uniforms.origin.y) + Double(h) * 0.5 * Double(uniforms.step.y)
         uniforms.c0 = SIMD2<Float>(Float(c0x), Float(c0y))
-        
+
         let maxIt = Int(uniforms.maxIt)
         var orbit = [SIMD2<Float>](repeating: .zero, count: maxIt)
         var zr = 0.0, zi = 0.0
@@ -636,6 +697,8 @@ final class MandelbrotRenderer: NSObject, MTKViewDelegate {
         }
         let length = orbit.count * MemoryLayout<SIMD2<Float>>.stride
         refOrbitBuffer = device.makeBuffer(bytes: orbit, length: length, options: .storageModeShared)
+        lastInvScale = 1.0 / max(1e-15, Double(uniforms.step.x))
+        lastC0Used = SIMD2<Double>(Double(uniforms.c0.x), Double(uniforms.c0.y))
     }
     
     func setPaletteImage(_ image: UIImage) {
