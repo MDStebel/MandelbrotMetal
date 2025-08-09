@@ -7,13 +7,13 @@
 	objects = {
 
 /* Begin PBXFileReference section */
-		E26454322E46F7000015F51C /* Mandelbrot.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Mandelbrot.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		E26454322E46F7000015F51C /* MandelbrotMetal.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = MandelbrotMetal.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
-		E26454342E46F7000015F51C /* Mandelbrot */ = {
+		E26454342E46F7000015F51C /* MandelbrotMetal */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
-			path = Mandelbrot;
+			path = MandelbrotMetal;
 			sourceTree = "<group>";
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
@@ -32,7 +32,7 @@
 		E26454292E46F7000015F51C = {
 			isa = PBXGroup;
 			children = (
-				E26454342E46F7000015F51C /* Mandelbrot */,
+				E26454342E46F7000015F51C /* MandelbrotMetal */,
 				E26454332E46F7000015F51C /* Products */,
 			);
 			sourceTree = "<group>";
@@ -40,7 +40,7 @@
 		E26454332E46F7000015F51C /* Products */ = {
 			isa = PBXGroup;
 			children = (
-				E26454322E46F7000015F51C /* Mandelbrot.app */,
+				E26454322E46F7000015F51C /* MandelbrotMetal.app */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -48,9 +48,9 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
-		E26454312E46F7000015F51C /* Mandelbrot */ = {
+		E26454312E46F7000015F51C /* MandelbrotMetal */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = E264543D2E46F7010015F51C /* Build configuration list for PBXNativeTarget "Mandelbrot" */;
+			buildConfigurationList = E264543D2E46F7010015F51C /* Build configuration list for PBXNativeTarget "MandelbrotMetal" */;
 			buildPhases = (
 				E264542E2E46F7000015F51C /* Sources */,
 				E264542F2E46F7000015F51C /* Frameworks */,
@@ -61,13 +61,13 @@
 			dependencies = (
 			);
 			fileSystemSynchronizedGroups = (
-				E26454342E46F7000015F51C /* Mandelbrot */,
+				E26454342E46F7000015F51C /* MandelbrotMetal */,
 			);
-			name = Mandelbrot;
+			name = MandelbrotMetal;
 			packageProductDependencies = (
 			);
 			productName = Mandelbrot;
-			productReference = E26454322E46F7000015F51C /* Mandelbrot.app */;
+			productReference = E26454322E46F7000015F51C /* MandelbrotMetal.app */;
 			productType = "com.apple.product-type.application";
 		};
 /* End PBXNativeTarget section */
@@ -85,7 +85,7 @@
 					};
 				};
 			};
-			buildConfigurationList = E264542D2E46F7000015F51C /* Build configuration list for PBXProject "Mandelbrot" */;
+			buildConfigurationList = E264542D2E46F7000015F51C /* Build configuration list for PBXProject "MandelbrotMetal" */;
 			developmentRegion = en;
 			hasScannedForEncodings = 0;
 			knownRegions = (
@@ -99,7 +99,7 @@
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
-				E26454312E46F7000015F51C /* Mandelbrot */,
+				E26454312E46F7000015F51C /* MandelbrotMetal */,
 			);
 		};
 /* End PBXProject section */
@@ -256,6 +256,7 @@
 				DEVELOPMENT_TEAM = ZA3NQHY725;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.education";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -284,6 +285,7 @@
 				DEVELOPMENT_TEAM = ZA3NQHY725;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.education";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -305,7 +307,7 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
-		E264542D2E46F7000015F51C /* Build configuration list for PBXProject "Mandelbrot" */ = {
+		E264542D2E46F7000015F51C /* Build configuration list for PBXProject "MandelbrotMetal" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				E264543B2E46F7010015F51C /* Debug */,
@@ -314,7 +316,7 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
-		E264543D2E46F7010015F51C /* Build configuration list for PBXNativeTarget "Mandelbrot" */ = {
+		E264543D2E46F7010015F51C /* Build configuration list for PBXNativeTarget "MandelbrotMetal" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				E264543E2E46F7010015F51C /* Debug */,
