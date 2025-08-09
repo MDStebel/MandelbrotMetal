@@ -435,6 +435,7 @@ final class MandelbrotRenderer: NSObject, MTKViewDelegate {
         let length = orbit.count * MemoryLayout<SIMD2<Float>>.stride
         refOrbitBuffer = device.makeBuffer(bytes: orbit, length: length, options: .storageModeShared)
     }
+    
     func setPaletteImage(_ image: UIImage) {
         guard let cg = image.cgImage else { return }
         let width = cg.width

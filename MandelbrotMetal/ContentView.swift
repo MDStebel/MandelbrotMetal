@@ -58,7 +58,7 @@ final class FractalVM: ObservableObject {
 
 struct MetalFractalView: UIViewRepresentable {
     @ObservedObject var vm: FractalVM
-
+    
     @MainActor
     func makeUIView(context: Context) -> MTKView {
         let view = MTKView()
@@ -70,7 +70,7 @@ struct MetalFractalView: UIViewRepresentable {
         vm.attachView(view)
         return view
     }
-
+    
     @MainActor
     func updateUIView(_ uiView: MTKView, context: Context) {
         vm.pushViewport(uiView.bounds.size,
@@ -91,11 +91,11 @@ struct ContentView: View {
     @State private var perturbation = false
     @State private var palette = 0 // 0=HSV, 1=Fire, 2=Ocean
     @State private var gradientItem: PhotosPickerItem? = nil
-
+    
     @State private var deepZoom = false
     @State private var snapshotImage: UIImage? = nil
     @State private var showShare = false
-
+    
     var body: some View {
         GeometryReader { geo in
             ZStack {
@@ -105,7 +105,7 @@ struct ContentView: View {
                     .onTapGesture(count: 2) { point in
                         doubleTapZoom(point: point, size: geo.size, factor: 2.0)
                     }
-
+                
                 hud
                     .padding(10)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -125,7 +125,7 @@ struct ContentView: View {
                     Button("Reset") { reset(geo.size) }
                     PhotosPicker("Import Gradient", selection: $gradientItem, matching: .images)
                         .onChange(of: gradientItem) { _, item in
-                            guard let item = item else { return }
+                            guard let item else { return }
                             Task { @MainActor in
                                 if let data = try? await item.loadTransferable(type: Data.self),
                                    let img = UIImage(data: data) {
@@ -137,16 +137,16 @@ struct ContentView: View {
                         }
                     Spacer()
                     Toggle("Perturb", isOn: $perturbation)
-                      .onChange(of: perturbation) { _, v in
-                        vm.renderer?.setPerturbation(v)
-                        vm.requestDraw()
-                      }
+                        .onChange(of: perturbation) { _, v in
+                            vm.renderer?.setPerturbation(v)
+                            vm.requestDraw()
+                        }
                     Toggle("Deep Zoom", isOn: $deepZoom)
                         .onChange(of: deepZoom) { _, v in
                             vm.renderer?.setDeepZoom(v)
                             vm.requestDraw()
                         }
-
+                    
                     Picker("Palette", selection: $palette) {
                         Text("HSV").tag(0)
                         Text("Fire").tag(1)
@@ -157,9 +157,9 @@ struct ContentView: View {
                         vm.renderer?.setPalette(newVal)
                         vm.requestDraw()
                     }
-
+                    
                     Spacer()
-
+                    
                     Stepper("Iterations: \(vm.maxIterations)",
                             value: $vm.maxIterations,
                             in: 200...4000, step: 100) { _ in
@@ -185,7 +185,7 @@ struct ContentView: View {
             }
         }
     }
-
+    
     private var hud: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text("Mandelbrot (Metal)").font(.headline.monospaced())
@@ -196,7 +196,7 @@ struct ContentView: View {
         .padding(8)
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 10))
     }
-
+    
     private func panAndZoom(_ size: CGSize) -> some Gesture {
         let pinch = MagnificationGesture()
             .onChanged { value in
@@ -206,7 +206,7 @@ struct ContentView: View {
             .onEnded { value in
                 applyPinch(value, size: size)
             }
-
+        
         let drag = DragGesture(minimumDistance: 0)
             .onChanged { value in
                 pendingCenter = dragToComplex(value.translation)
@@ -215,10 +215,10 @@ struct ContentView: View {
             .onEnded { value in
                 applyDrag(value, size: size)
             }
-
+        
         return drag.simultaneously(with: pinch)
     }
-
+    
     private func applyPinch(_ value: CGFloat, size: CGSize) {
         let factor = Double(value)
         vm.scalePixelsPerUnit *= factor
@@ -226,21 +226,21 @@ struct ContentView: View {
         vm.pushViewport(size, screenScale: UIScreen.main.scale)
         vm.requestDraw()
     }
-
+    
     private func applyDrag(_ value: DragGesture.Value, size: CGSize) {
         vm.center += dragToComplex(value.translation)
         pendingCenter = .zero
         vm.pushViewport(size, screenScale: UIScreen.main.scale)
         vm.requestDraw()
     }
-
+    
     private func liveUpdate(size: CGSize) {
         var center = vm.center + pendingCenter
         var scale = vm.scalePixelsPerUnit * pendingScale
         scale = max(0.01, min(scale, 1e12))
         center.x = clamp(center.x, -3.0, 3.0)
         center.y = clamp(center.y, -3.0, 3.0)
-
+        
         vm.renderer?.setViewport(center: center,
                                  scalePixelsPerUnit: scale,
                                  sizePts: size,
@@ -248,37 +248,37 @@ struct ContentView: View {
                                  maxIterations: vm.maxIterations)
         vm.requestDraw()
     }
-
+    
     private func doubleTapZoom(point: CGPoint, size: CGSize, factor: Double) {
         let s = Double(UIScreen.main.scale)
         let pixelW = Double(size.width) * s
         let pixelH = Double(size.height) * s
         let invScale = 1.0 / vm.scalePixelsPerUnit
-
+        
         let halfW = 0.5 * pixelW
         let halfH = 0.5 * pixelH
-
+        
         let cxBefore = (Double(point.x) * s - halfW) * invScale + vm.center.x
         let cyBefore = (Double(point.y) * s - halfH) * invScale + vm.center.y
-
+        
         vm.scalePixelsPerUnit *= factor
-
+        
         let invScaleAfter = 1.0 / vm.scalePixelsPerUnit
         let cxAfter = (Double(point.x) * s - halfW) * invScaleAfter + vm.center.x
         let cyAfter = (Double(point.y) * s - halfH) * invScaleAfter + vm.center.y
-
+        
         vm.center += SIMD2<Double>(cxBefore - cxAfter, cyBefore - cyAfter)
         vm.pushViewport(size, screenScale: UIScreen.main.scale)
         vm.requestDraw()
     }
-
+    
     private func reset(_ size: CGSize) {
         vm.center = SIMD2(-0.5, 0.0)
         vm.scalePixelsPerUnit = 1
         vm.pushViewport(size, screenScale: UIScreen.main.scale)
         vm.requestDraw()
     }
-
+    
     private func dragToComplex(_ translation: CGSize) -> SIMD2<Double> {
         let s = UIScreen.main.scale
         let dx = Double(translation.width)  * Double(s)
@@ -286,14 +286,14 @@ struct ContentView: View {
         let invScale = 1.0 / vm.scalePixelsPerUnit
         return SIMD2<Double>(-dx * invScale, -dy * invScale)
     }
-
+    
     private func fmt(_ x: Double) -> String {
         let f = NumberFormatter()
         f.numberStyle = .decimal
         f.maximumFractionDigits = 6
         return f.string(from: x as NSNumber) ?? "\(x)"
     }
-
+    
     private func clamp(_ v: Double, _ a: Double, _ b: Double) -> Double { max(a, min(b, v)) }
 }
 
