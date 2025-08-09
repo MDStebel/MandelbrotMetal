@@ -15,6 +15,8 @@ struct MandelbrotUniforms {
     float2 originLo; // deep zoom lo components (re, im)
     float2 stepHi;   // deep zoom step hi (dx, dy)
     float2 stepLo;   // deep zoom step lo (dx, dy)
+    int    perturbation; // 0=off, 1=on
+    float2 c0;           // reference point for perturbation (complex)
 };
 
 // ===== Helpers =====
@@ -63,9 +65,13 @@ inline float3 palette_cosine(float t, float3 a, float3 b, float3 c, float3 d) {
 }
 
 // ===== Kernel =====
-kernel void mandelbrotKernel(const device MandelbrotUniforms& u [[buffer(0)]],
-                             texture2d<float, access::write> outTex [[texture(0)]],
-                             uint2 gid [[thread_position_in_grid]])
+kernel void mandelbrotKernel(
+    const device MandelbrotUniforms& u [[buffer(0)]],
+    const device float2* refOrbit [[buffer(1)]],        // present if perturbation is supported
+    texture2d<float, access::write> outTex [[texture(0)]],
+    texture2d<float, access::sample> paletteTex [[texture(1)]], // present if LUT is supported
+    uint2 gid [[thread_position_in_grid]]
+)
 {
     int stepPix = max(1, u.pixelStep);
     uint baseX = gid.x * (uint)stepPix;
@@ -90,39 +96,70 @@ kernel void mandelbrotKernel(const device MandelbrotUniforms& u [[buffer(0)]],
         ci = ds_to_float(i);
     }
 
-    // Escape-time loop (single-precision iteration)
-    float zr = 0.0f, zi = 0.0f;
-    float zr2 = 0.0f, zi2 = 0.0f;
+    // Delta from reference point c0 for perturbation
+    float dcr = cr - u.c0.x;
+    float dci = ci - u.c0.y;
+
     int it = 0;
     const int maxIt = u.maxIt;
-    while (it < maxIt && (zr2 + zi2) <= 4.0f) {
-        zi = 2.0f * zr * zi + ci;
-        zr = zr2 - zi2 + cr;
-        zr2 = zr * zr;
-        zi2 = zi * zi;
-        ++it;
+    float zr, zi, zr2, zi2;
+
+    if (u.perturbation != 0) {
+        // Perturbation delta iteration: w_{n+1} = 2*z_n*w_n + w_n^2 + (c - c0)
+        float wr = 0.0f, wi = 0.0f; // w_0 = 0
+        for (it = 0; it < maxIt; ++it) {
+            float2 zn = refOrbit[it];
+            // w^2
+            float w2r = wr*wr - wi*wi;
+            float w2i = 2.0f*wr*wi;
+            // 2*z_n*w
+            float twr = 2.0f * (zn.x * wr - zn.y * wi);
+            float twi = 2.0f * (zn.x * wi + zn.y * wr);
+            // w_{n+1}
+            wr = twr + w2r + dcr;
+            wi = twi + w2i + dci;
+            // Evaluate z_n + w_n
+            zr = zn.x + wr;
+            zi = zn.y + wi;
+            zr2 = zr*zr; zi2 = zi*zi;
+            if (zr2 + zi2 > 4.0f) { break; }
+        }
+    } else {
+        // Standard iteration
+        zr = 0.0f; zi = 0.0f; zr2 = 0.0f; zi2 = 0.0f;
+        while (it < maxIt && (zr2 + zi2) <= 4.0f) {
+            zi = 2.0f * zr * zi + ci;
+            zr = zr2 - zi2 + cr;
+            zr2 = zr * zr;
+            zi2 = zi * zi;
+            ++it;
+        }
     }
 
     float t = smooth_iter(it, zr2 + zi2, maxIt);
     float3 rgb;
     if (it >= maxIt) {
         rgb = float3(0.0);
+    } else if (u.palette == 3) {
+        // Sample from imported gradient LUT (bound to texture(1))
+        constexpr sampler s(address::clamp_to_edge, filter::linear);
+        float ucoord = clamp(t, 0.0f, 1.0f);
+        float4 c = paletteTex.sample(s, float2(ucoord, 0.5f));
+        rgb = c.rgb;
+    } else if (u.palette == 0) {
+        rgb = palette_hsv(t);
+    } else if (u.palette == 1) {
+        rgb = palette_cosine(t,
+                             float3(0.2, 0.0, 0.0),
+                             float3(0.8, 0.7, 0.0),
+                             float3(1.0, 1.0, 1.0),
+                             float3(0.0, 0.15, 0.20));
     } else {
-        if (u.palette == 0) {
-            rgb = palette_hsv(t);
-        } else if (u.palette == 1) {
-            rgb = palette_cosine(t,
-                                 float3(0.2, 0.0, 0.0),
-                                 float3(0.8, 0.7, 0.0),
-                                 float3(1.0, 1.0, 1.0),
-                                 float3(0.0, 0.15, 0.20));
-        } else {
-            rgb = palette_cosine(t,
-                                 float3(0.1, 0.2, 0.4),
-                                 float3(0.3, 0.4, 0.6),
-                                 float3(1.0, 1.0, 1.0),
-                                 float3(0.0, 0.25, 0.20));
-        }
+        rgb = palette_cosine(t,
+                             float3(0.1, 0.2, 0.4),
+                             float3(0.3, 0.4, 0.6),
+                             float3(1.0, 1.0, 1.0),
+                             float3(0.0, 0.25, 0.20));
     }
 
     // Fill the block

@@ -8,6 +8,8 @@
 import SwiftUI
 import MetalKit
 import simd
+import PhotosUI
+import UIKit
 
 @MainActor
 final class FractalVM: ObservableObject {
@@ -88,6 +90,11 @@ struct ContentView: View {
     @State private var pendingScale  = 1.0
     @State private var perturbation = false
     @State private var palette = 0 // 0=HSV, 1=Fire, 2=Ocean
+    @State private var gradientItem: PhotosPickerItem? = nil
+
+    @State private var deepZoom = false
+    @State private var snapshotImage: UIImage? = nil
+    @State private var showShare = false
 
     var body: some View {
         GeometryReader { geo in
@@ -108,6 +115,7 @@ struct ContentView: View {
                 vm.requestDraw()
                 vm.renderer?.setPerturbation(perturbation)
                 vm.renderer?.setPalette(palette)
+                vm.renderer?.setDeepZoom(deepZoom)
             }
             .onChange(of: geo.size) { _, newSize in
                 vm.pushViewport(newSize, screenScale: UIScreen.main.scale)
@@ -115,12 +123,29 @@ struct ContentView: View {
             .toolbar {
                 ToolbarItemGroup(placement: .bottomBar) {
                     Button("Reset") { reset(geo.size) }
+                    PhotosPicker("Import Gradient", selection: $gradientItem, matching: .images)
+                        .onChange(of: gradientItem) { _, item in
+                            guard let item = item else { return }
+                            Task { @MainActor in
+                                if let data = try? await item.loadTransferable(type: Data.self),
+                                   let img = UIImage(data: data) {
+                                    vm.renderer?.setPaletteImage(img)
+                                    vm.renderer?.setPalette(3) // 3 = LUT in shader
+                                    vm.requestDraw()
+                                }
+                            }
+                        }
                     Spacer()
                     Toggle("Perturb", isOn: $perturbation)
                       .onChange(of: perturbation) { _, v in
                         vm.renderer?.setPerturbation(v)
                         vm.requestDraw()
                       }
+                    Toggle("Deep Zoom", isOn: $deepZoom)
+                        .onChange(of: deepZoom) { _, v in
+                            vm.renderer?.setDeepZoom(v)
+                            vm.requestDraw()
+                        }
 
                     Picker("Palette", selection: $palette) {
                         Text("HSV").tag(0)
@@ -141,6 +166,21 @@ struct ContentView: View {
                         vm.renderer?.setMaxIterations(vm.maxIterations)
                         vm.requestDraw()
                     }
+                    Button("Save 4K") {
+                        if let img = vm.renderer?.makeSnapshot(width: 3840,
+                                                               height: 2160,
+                                                               center: vm.center,
+                                                               scalePixelsPerUnit: vm.scalePixelsPerUnit,
+                                                               iterations: vm.maxIterations) {
+                            snapshotImage = img
+                            showShare = true
+                        }
+                    }
+                }
+            }
+            .sheet(isPresented: $showShare) {
+                if let img = snapshotImage {
+                    ShareSheet(items: [img])
                 }
             }
         }
@@ -255,4 +295,12 @@ struct ContentView: View {
     }
 
     private func clamp(_ v: Double, _ a: Double, _ b: Double) -> Double { max(a, min(b, v)) }
+}
+
+struct ShareSheet: UIViewControllerRepresentable {
+    let items: [Any]
+    func makeUIViewController(context: Context) -> UIActivityViewController {
+        UIActivityViewController(activityItems: items, applicationActivities: nil)
+    }
+    func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
 }
