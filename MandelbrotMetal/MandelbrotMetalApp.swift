@@ -1,6 +1,6 @@
 //
 //  MandelbrotApp.swift
-//  MandelbrotMetal
+//  Mandelbrot Metal
 //
 //  Created by Michael Stebel on 8/8/25.
 //
