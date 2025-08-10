@@ -7,6 +7,7 @@
 
 import MetalKit
 import PhotosUI
+import Photos
 import SwiftUI
 import UIKit
 import simd
@@ -143,6 +144,7 @@ struct ContentView: View {
     @State private var showAbout = false
     @State private var showHelp = false
     @State private var autoIterations = false
+    @State private var showOptionsSheet = false
     struct Bookmark: Codable, Identifiable { var id = UUID(); var name: String; var center: SIMD2<Double>; var scale: Double; var palette: Int; var deep: Bool; var perturb: Bool }
     @State private var bookmarks: [Bookmark] = []
     @State private var showAddBookmark = false
@@ -287,6 +289,30 @@ struct ContentView: View {
                 }
             }
             .sheet(isPresented: .constant(false)) { EmptyView() } // placeholder to keep chaining stable
+            .sheet(isPresented: $showOptionsSheet) {
+                CompactOptionsSheet(
+                    currentPaletteName: $currentPaletteName,
+                    showPalettePicker: $showPalettePicker,
+                    autoIterations: $autoIterations,
+                    iterations: $vm.maxIterations,
+                    perturbation: $perturbation,
+                    deepZoom: $deepZoom,
+                    paletteOptions: paletteOptions,
+                    applyPalette: { opt in
+                        applyPaletteOption(opt)
+                    },
+                    onImportGradient: { item in
+                        gradientItem = item
+                        importGradientItem(item)
+                    },
+                    onSave: { saveCurrentSnapshot() },
+                    onAbout: { showAbout = true },
+                    onHelp: { showHelp = true },
+                    onClose: { showOptionsSheet = false }
+                )
+                .presentationDetents([.medium, .large])
+                .presentationDragIndicator(.visible)
+            }
         }
     }
 
@@ -510,96 +536,36 @@ struct ContentView: View {
     private func floatingControls(_ geo: GeometryProxy) -> some View {
         let compact = (hSize == .compact)
         if compact {
-            // Compact: one-row floating bar with a More menu
-            HStack(spacing: 12) {
-                Button(action: { reset(geo.size) }) { Label("Reset", systemImage: "arrow.counterclockwise") }
-                    .labelStyle(.iconOnly)
-                Menu {
-                    // Palette
-                    Button(action: { showPalettePicker = true }) {
-                        HStack(spacing: 8) {
-                            palettePreview(for: currentPaletteName)
-                                .frame(width: 44, height: 16)
-                                .clipShape(Capsule())
-                                .overlay(Capsule().strokeBorder(.white.opacity(0.2)))
-                            Text(currentPaletteName)
-                        }
-                    }
-                    Divider()
-                    // Iterations
-                    Stepper(value: $vm.maxIterations, in: 200...4000, step: 100, onEditingChanged: { _ in
-                        vm.renderer?.setMaxIterations(vm.maxIterations)
-                        vm.requestDraw()
-                    }) { Text(autoIterations ? "Iterations: \(effectiveIterations) (auto)" : "Iterations: \(vm.maxIterations)") }
-                    HStack(spacing: 8) {
-                        Toggle("", isOn: $autoIterations)
-                            .labelsHidden()
-                            .toggleStyle(AccessibleSwitchToggleStyle())
-                        Text("Auto Iter")
-                    }
-                    Divider()
-                    // Toggles
-                    HStack(spacing: 8) {
-                        Toggle("", isOn: $perturbation)
-                            .labelsHidden()
-                            .toggleStyle(AccessibleSwitchToggleStyle())
-                            .onChange(of: perturbation) { _, v in
-                                vm.renderer?.setPerturbation(v)
-                                vm.requestDraw()
-                            }
-                        Text("Perturb")
-                    }
-                    HStack(spacing: 8) {
-                        Toggle("", isOn: $deepZoom)
-                            .labelsHidden()
-                            .toggleStyle(AccessibleSwitchToggleStyle())
-                            .onChange(of: deepZoom) { _, v in
-                                vm.renderer?.setDeepZoom(v)
-                                vm.requestDraw()
-                            }
-                        Text("Deep Zoom")
-                    }
-                    Divider()
-                    // Bookmarks
-                    Menu("Bookmarks") {
-                        Button("Add Current…") { newBookmarkName = ""; showAddBookmark = true }
-                        if !bookmarks.isEmpty {
-                            Divider()
-                            ForEach(bookmarks) { bm in
-                                Button(bm.name) { applyBookmark(bm, size: geo.size) }
-                            }
-                            Divider()
-                            Button("Clear All", role: .destructive) { bookmarks.removeAll(); saveBookmarks() }
-                        }
-                    }
-                    // Resolution
-                    Menu("Resolution") {
-                        Picker("Resolution", selection: $snapRes) {
-                            ForEach(SnapshotRes.allCases) { opt in Text(opt.rawValue).tag(opt) }
-                        }
-                        Button("Custom…") { showCustomRes = true }
-                    }
-                    Divider()
-                    // Import / Info
-                    PhotosPicker("Import Gradient", selection: $gradientItem, matching: .images)
-                        .onChange(of: gradientItem) { _, item in importGradientItem(item) }
-                    Button("About") { showAbout = true }
-                    Button("Help") { showHelp = true }
-                } label: {
-                    Label("Options", systemImage: "slider.horizontal.3")
+            HStack(spacing: 14) {
+                Button(action: { reset(geo.size) }) {
+                    Image(systemName: "arrow.counterclockwise")
+                        .imageScale(.large)
+                        .padding(8)
                 }
-                Spacer()
-                Button(action: { saveCurrentSnapshot() }) { Label("Save", systemImage: "square.and.arrow.up") }
-                    .labelStyle(.iconOnly)
+                .accessibilityLabel("Reset")
+                Spacer(minLength: 8)
+                Button(action: { saveCurrentSnapshot() }) {
+                    Image(systemName: "square.and.arrow.down")
+                        .imageScale(.large)
+                        .padding(8)
+                }
+                .accessibilityLabel("Save")
+                Button(action: { showOptionsSheet = true }) {
+                    Label("Options", systemImage: "slider.horizontal.3")
+                        .labelStyle(.iconOnly)
+                        .imageScale(.large)
+                        .padding(8)
+                }
+                .accessibilityLabel("Options")
             }
-            .padding(.horizontal, 12)
+            .padding(.horizontal, 14)
             .padding(.vertical, 10)
-            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
             .overlay(
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
                     .strokeBorder(.white.opacity(0.15))
             )
-            .shadow(radius: 8)
+            .shadow(radius: 10)
             .tint(.primary)
             .foregroundStyle(.primary)
         } else {
@@ -938,6 +904,16 @@ struct ContentView: View {
                 showShare = true
             }
             print("[UI] wrote snapshot -> \(url.lastPathComponent)")
+
+            // ALSO save to the user's Photos library (add-only permission)
+            PhotoSaver.shared.saveToPhotos(img) { result in
+                switch result {
+                case .success:
+                    print("✅ Saved to Photos")
+                case .failure(let err):
+                    print("❌ Photos save failed: \(err)")
+                }
+            }
         } catch {
             print("[UI] failed to write snapshot: \(error)")
         }
@@ -1103,6 +1079,33 @@ struct ShareSheet: UIViewControllerRepresentable {
     func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
 }
 
+// MARK: - Photo Library Saving Helper
+enum PhotoSaveError: Error {
+    case notAuthorized
+    case writeFailed(Error?)
+}
+
+final class PhotoSaver {
+    static let shared = PhotoSaver()
+
+    /// Requests add-only permission if needed, then saves the image to Photos.
+    func saveToPhotos(_ image: UIImage, completion: @escaping (Result<Void, PhotoSaveError>) -> Void) {
+        PHPhotoLibrary.requestAuthorization(for: .addOnly) { status in
+            guard status == .authorized || status == .limited else {
+                DispatchQueue.main.async { completion(.failure(.notAuthorized)) }
+                return
+            }
+            PHPhotoLibrary.shared().performChanges({
+                PHAssetChangeRequest.creationRequestForAsset(from: image)
+            }, completionHandler: { ok, err in
+                DispatchQueue.main.async {
+                    ok ? completion(.success(())) : completion(.failure(.writeFailed(err)))
+                }
+            })
+        }
+    }
+}
+
 private struct PalettePickerView: View {
     @Environment(\.horizontalSizeClass) private var hSize
     let selected: String
@@ -1165,5 +1168,120 @@ private struct PaletteSwatchButton: View {
         .buttonStyle(.plain)
         .accessibilityLabel(Text(option.name))
         .accessibilityAddTraits(selected ? .isSelected : AccessibilityTraits())
+    }
+}
+
+// MARK: - Compact Options Sheet (iPhone)
+private struct CompactOptionsSheet: View {
+    @Binding var currentPaletteName: String
+    @Binding var showPalettePicker: Bool
+    @Binding var autoIterations: Bool
+    @Binding var iterations: Int
+    @Binding var perturbation: Bool
+    @Binding var deepZoom: Bool
+
+    let paletteOptions: [ContentView.PaletteOption]
+    let applyPalette: (ContentView.PaletteOption) -> Void
+    let onImportGradient: (PhotosPickerItem?) -> Void
+    let onSave: () -> Void
+    let onAbout: () -> Void
+    let onHelp: () -> Void
+    let onClose: () -> Void
+
+    @State private var localGradientItem: PhotosPickerItem? = nil
+
+    var body: some View {
+        NavigationView {
+            List {
+                Section {
+                    HStack {
+                        Label("Perturbation", systemImage: "bolt.circle")
+                        Spacer()
+                        Toggle("", isOn: $perturbation)
+                            .labelsHidden()
+                            .toggleStyle(AccessibleSwitchToggleStyle())
+                    }
+                    HStack {
+                        Label("Deep Zoom", systemImage: "scope")
+                        Spacer()
+                        Toggle("", isOn: $deepZoom)
+                            .labelsHidden()
+                            .toggleStyle(AccessibleSwitchToggleStyle())
+                    }
+                } header: {
+                    Text("Modes")
+                }
+
+                Section {
+                    Stepper(value: $iterations, in: 200...12000, step: 100) {
+                        Text(autoIterations ? "Iterations: \(iterations) (auto)" : "Iterations: \(iterations)")
+                    }
+                    HStack {
+                        Toggle("", isOn: $autoIterations)
+                            .labelsHidden()
+                            .toggleStyle(AccessibleSwitchToggleStyle())
+                        Text("Auto Increase with Zoom")
+                            .font(.subheadline)
+                    }
+                } header: {
+                    Text("Iterations")
+                }
+
+                Section {
+                    Button {
+                        showPalettePicker = true
+                    } label: {
+                        HStack(spacing: 10) {
+                            Image(systemName: "paintpalette")
+                            Text("Choose Palette")
+                            Spacer()
+                            Text(currentPaletteName).foregroundStyle(.secondary)
+                        }
+                    }
+                    PhotosPicker(selection: $localGradientItem, matching: .images) {
+                        HStack {
+                            Image(systemName: "photo.on.rectangle")
+                            Text("Import Gradient")
+                        }
+                    }
+                    .onChange(of: localGradientItem) { _, item in
+                        onImportGradient(item)
+                    }
+                } header: {
+                    Text("Color")
+                }
+
+                Section {
+                    Button {
+                        onSave()
+                    } label: {
+                        HStack {
+                            Image(systemName: "square.and.arrow.down")
+                            Text("Save Image")
+                        }
+                    }
+                } header: {
+                    Text("Export")
+                }
+
+                Section {
+                    Button {
+                        onAbout()
+                    } label: { Label("About", systemImage: "info.circle") }
+                    Button {
+                        onHelp()
+                    } label: { Label("Help", systemImage: "questionmark.circle") }
+                } header: {
+                    Text("Info")
+                }
+            }
+            .listStyle(.insetGrouped)
+            .navigationTitle("Options")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Close") { onClose() }
+                }
+            }
+        }
     }
 }
