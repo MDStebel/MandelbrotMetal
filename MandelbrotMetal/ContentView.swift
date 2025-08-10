@@ -34,13 +34,14 @@ final class FractalVM: ObservableObject {
         let wD = Double(size.width) * Double(screenScale)
         let hD = Double(size.height) * Double(screenScale)
         guard wD.isFinite, hD.isFinite else { return }
-        let pixelW = max(1, Int(wD.rounded()))
+        let pixelW = max(1, Int(floor(wD)))
+        _ = max(1, Int(floor(hD))) // doc of intent
 
         let workingScale: Double
         if scalePixelsPerUnit == 1 {
             workingScale = Double(pixelW) / 3.5
             DispatchQueue.main.async { [weak self] in
-                guard let self = self else { return }
+                guard let self else { return }
                 self.scalePixelsPerUnit = workingScale
                 if self.baselineScale == 1 { self.baselineScale = workingScale }
             }
@@ -105,6 +106,7 @@ struct MetalFractalView: UIViewRepresentable {
         view.isPaused = false
         view.enableSetNeedsDisplay = false // continuous redraw
         view.preferredFramesPerSecond = 60
+        view.autoResizeDrawable = false
         guard let renderer = MandelbrotRenderer(mtkView: view) else { return view }
         vm.attachRenderer(renderer)
         vm.attachView(view)
@@ -113,13 +115,24 @@ struct MetalFractalView: UIViewRepresentable {
     
     @MainActor
     func updateUIView(_ uiView: MTKView, context: Context) {
-        vm.pushViewport(uiView.bounds.size,
-                        screenScale: uiView.window?.screen.scale ?? UIScreen.main.scale)
-        let scale = uiView.window?.screen.scale ?? UIScreen.main.scale
+        let nominalScale = uiView.window?.screen.scale ?? UIScreen.main.scale
         let sizePts = uiView.bounds.size
-        let sizePx = CGSize(width: max(1, sizePts.width * scale),
-                            height: max(1, sizePts.height * scale))
+        // Floor to whole pixels so it doesn’t bounce between adjacent sizes
+        let sizePx = CGSize(
+            width: floor(max(1, sizePts.width  * nominalScale)),
+            height: floor(max(1, sizePts.height * nominalScale))
+        )
         uiView.drawableSize = sizePx
+
+        // Use the ACTUAL pixels-per-point used by MTKView (prevents 1px jumps)
+        let scaleUsed: CGFloat
+        if sizePts.width > 0 {
+            scaleUsed = sizePx.width / sizePts.width
+        } else {
+            scaleUsed = nominalScale
+        }
+
+        vm.pushViewport(sizePts, screenScale: scaleUsed)
         vm.requestDraw()
     }
 }
@@ -152,7 +165,14 @@ struct ContentView: View {
     @State private var fallbackBanner: String? = nil
     @State private var fallbackObserver: NSObjectProtocol? = nil
 
-    enum SnapshotRes: String, CaseIterable, Identifiable { case r4k="4K (3840×2160)", r6k="6K (5760×3240)", r8k="8K (7680×4320)", custom="Custom…"; var id: String { rawValue } }
+    enum SnapshotRes: String, CaseIterable, Identifiable {
+        case r4k="4K (3840×2160)",
+             r6k="6K (5760×3240)",
+             r8k="8K (7680×4320)",
+             custom="Custom…"; var id: String {
+                 rawValue
+             }
+    }
     @State private var snapRes: SnapshotRes = .r4k
     @State private var customW: String = "3840"
     @State private var customH: String = "2160"
@@ -187,7 +207,7 @@ struct ContentView: View {
                     deepZoom = s.deep
                     palette = s.palette
                 }
-                vm.pushViewport(geo.size, screenScale: UIScreen.main.scale)
+                vm.pushViewport(currentPointsSize(geo.size), screenScale: currentScreenScale())
                 vm.requestDraw()
                 vm.renderer?.setPerturbation(perturbation)
                 vm.renderer?.setPalette(palette)
@@ -211,17 +231,17 @@ struct ContentView: View {
                 }
             }
             .onChange(of: geo.size) { _, newSize in
-                vm.pushViewport(newSize, screenScale: UIScreen.main.scale)
+                vm.pushViewport(currentPointsSize(newSize), screenScale: currentScreenScale())
             }
-            .onChange(of: perturbation) { _, _ in vm.saveState(perturb: perturbation, deep: deepZoom, palette: palette) }
-            .onChange(of: deepZoom) { _, _ in vm.saveState(perturb: perturbation, deep: deepZoom, palette: palette) }
-            .onChange(of: palette) { _, _ in vm.saveState(perturb: perturbation, deep: deepZoom, palette: palette) }
-            .onChange(of: vm.center) { _, _ in vm.saveState(perturb: perturbation, deep: deepZoom, palette: palette) }
-            .onChange(of: vm.scalePixelsPerUnit) { _, _ in vm.saveState(perturb: perturbation, deep: deepZoom, palette: palette) }
-            .onChange(of: vm.maxIterations) { _, _ in vm.saveState(perturb: perturbation, deep: deepZoom, palette: palette) }
+            .onChange(of: perturbation) { vm.saveState(perturb: perturbation, deep: deepZoom, palette: palette) }
+            .onChange(of: deepZoom)     { vm.saveState(perturb: perturbation, deep: deepZoom, palette: palette) }
+            .onChange(of: palette)      { vm.saveState(perturb: perturbation, deep: deepZoom, palette: palette) }
+            .onChange(of: vm.center)    { vm.saveState(perturb: perturbation, deep: deepZoom, palette: palette) }
+            .onChange(of: vm.scalePixelsPerUnit) { vm.saveState(perturb: perturbation, deep: deepZoom, palette: palette) }
+            .onChange(of: vm.maxIterations)      { vm.saveState(perturb: perturbation, deep: deepZoom, palette: palette) }
             .toolbar { }
             .sheet(isPresented: $showPalettePicker) {
-                NavigationView {
+                NavigationStack {
                     PalettePickerView(selected: currentPaletteName, options: paletteOptions) { opt in
                         applyPaletteOption(opt)
                         showPalettePicker = false
@@ -234,7 +254,7 @@ struct ContentView: View {
                 ShareSheet(items: shareItems)
             }
             .sheet(isPresented: $showCustomRes) {
-                NavigationView {
+                NavigationStack {
                     Form {
                         Section(header: Text("Custom Resolution")) {
                             TextField("Width", text: $customW).keyboardType(.numberPad)
@@ -249,7 +269,7 @@ struct ContentView: View {
                 }
             }
             .sheet(isPresented: $showHelp) {
-                NavigationView {
+                NavigationStack {
                     HelpView()
                         .navigationTitle("Help")
                         .toolbar {
@@ -269,7 +289,7 @@ struct ContentView: View {
                 .padding()
             }
             .sheet(isPresented: $showAddBookmark) {
-                NavigationView {
+                NavigationStack {
                     Form { TextField("Name", text: $newBookmarkName) }
                         .navigationTitle("Add Bookmark")
                         .toolbar {
@@ -288,7 +308,7 @@ struct ContentView: View {
                         }
                 }
             }
-            .sheet(isPresented: .constant(false)) { EmptyView() } // placeholder to keep chaining stable
+            .sheet(isPresented: .constant(false)) { EmptyView() } // placeholder
             .sheet(isPresented: $showOptionsSheet) {
                 CompactOptionsSheet(
                     currentPaletteName: $currentPaletteName,
@@ -297,6 +317,7 @@ struct ContentView: View {
                     iterations: $vm.maxIterations,
                     perturbation: $perturbation,
                     deepZoom: $deepZoom,
+                    snapRes: $snapRes,
                     paletteOptions: paletteOptions,
                     applyPalette: { opt in
                         applyPaletteOption(opt)
@@ -308,33 +329,50 @@ struct ContentView: View {
                     onSave: { saveCurrentSnapshot() },
                     onAbout: { showAbout = true },
                     onHelp: { showHelp = true },
-                    onClose: { showOptionsSheet = false }
+                    onClose: { showOptionsSheet = false },
+                    onCustom: { showCustomRes = true }
                 )
                 .presentationDetents([.medium, .large])
                 .presentationDragIndicator(.visible)
             }
         }
     }
+    
+    private func currentScreenScale() -> CGFloat {
+        if let v = vm.mtkView {
+            let ptsW = v.bounds.size.width
+            let pxW  = v.drawableSize.width
+            if ptsW > 0 { return pxW / ptsW } // actual pixels-per-point
+            return v.window?.screen.scale ?? UIScreen.main.scale
+        }
+        return UIScreen.main.scale
+    }
+
+    // NEW: always use the MTKView’s actual points size for mapping
+    private func currentPointsSize(_ fallback: CGSize) -> CGSize {
+        if let v = vm.mtkView { return v.bounds.size }
+        return fallback
+    }
 
     @ViewBuilder
     private func fractalCanvas(_ geo: GeometryProxy) -> some View {
+        let singleTap = SpatialTapGesture(count: 1).onEnded { value in
+            recenterAtTap(value.location, size: geo.size)
+        }
+        let doubleTap = SpatialTapGesture(count: 2).onEnded { value in
+            doubleTapZoom(point: value.location, size: geo.size, factor: 2.0)
+        }
+
         MetalFractalView(vm: vm)
+            .ignoresSafeArea()
             .contentShape(Rectangle())
-            .gesture(panAndZoom(geo.size))
+            .gesture(panAndZoom(geo.size))                       // pan + pinch
+            .highPriorityGesture(doubleTap)                      // ensure double‑tap wins
+            .simultaneousGesture(singleTap)                      // single‑tap recenter
             .simultaneousGesture(
                 LongPressGesture(minimumDuration: 0.5).onEnded { _ in
                     vm.renderer?.recenterReference(atComplex: vm.center, iterations: vm.maxIterations)
                     vm.requestDraw()
-                }
-            )
-            .simultaneousGesture(
-                SpatialTapGesture(count: 1).onEnded { value in
-                    recenterAtTap(value.location, size: geo.size)
-                }
-            )
-            .simultaneousGesture(
-                SpatialTapGesture(count: 2).onEnded { value in
-                    doubleTapZoom(point: value.location, size: geo.size, factor: 2.0)
                 }
             )
     }
@@ -345,14 +383,10 @@ struct ContentView: View {
         let title: String
         let a11y: String
         switch index {
-        case 0:
-            title = "HSV"; a11y = "HSV"
-        case 1:
-            title = compact ? "🔥" : "Fire"; a11y = "Fire"
-        case 2:
-            title = compact ? "🌊" : "Ocean"; a11y = "Ocean"
-        default:
-            title = "LUT"; a11y = "LUT"
+        case 0: title = "HSV";     a11y = "HSV"
+        case 1: title = compact ? "🔥" : "Fire";  a11y = "Fire"
+        case 2: title = compact ? "🌊" : "Ocean"; a11y = "Ocean"
+        default: title = "LUT";   a11y = "LUT"
         }
         return Text(title)
             .font(compact ? .caption2 : .body)
@@ -365,29 +399,66 @@ struct ContentView: View {
 
     var paletteOptions: [PaletteOption] {
         [
-            // Built-ins
-            PaletteOption(name: "HSV",     builtInIndex: 0, stops: hsvStops()),
-            PaletteOption(name: "Fire",    builtInIndex: 1, stops: fireStops()),
-            PaletteOption(name: "Ocean",   builtInIndex: 2, stops: oceanStops()),
-            // Scientific maps
-            PaletteOption(name: "Magma",   builtInIndex: nil, stops: magmaStops()),
-            PaletteOption(name: "Inferno", builtInIndex: nil, stops: infernoStops()),
-            PaletteOption(name: "Plasma",  builtInIndex: nil, stops: plasmaStops()),
-            PaletteOption(name: "Viridis", builtInIndex: nil, stops: viridisStops()),
-            PaletteOption(name: "Turbo",   builtInIndex: nil, stops: turboStops()),
-            PaletteOption(name: "Cubehelix", builtInIndex: nil, stops: cubehelixStops()),
-            // Artistic maps
-            PaletteOption(name: "Sunset",  builtInIndex: nil, stops: sunsetStops()),
-            PaletteOption(name: "Pastel",  builtInIndex: nil, stops: pastelStops()),
-            PaletteOption(name: "Aurora",  builtInIndex: nil, stops: auroraStops()),
-            PaletteOption(name: "Rainbow", builtInIndex: nil, stops: rainbowSmoothStops()),
-            // Natural maps
-            PaletteOption(name: "Earth",   builtInIndex: nil, stops: earthStops()),
-            PaletteOption(name: "Forest",  builtInIndex: nil, stops: forestStops()),
-            PaletteOption(name: "Ice",     builtInIndex: nil, stops: iceStops()),
-            // Utility
-            PaletteOption(name: "Topo",    builtInIndex: nil, stops: topoStops()),
-            PaletteOption(name: "Grayscale", builtInIndex: nil, stops: grayscaleStops())
+            // ——— Vivid / Artistic LUTs ———
+            PaletteOption(name: "Neon",             builtInIndex: nil, stops: neonStops()),
+            PaletteOption(name: "Vibrant",          builtInIndex: nil, stops: vibrantStops()),
+            PaletteOption(name: "Sunset Glow",      builtInIndex: nil, stops: sunsetGlowStops()),
+            PaletteOption(name: "Candy",            builtInIndex: nil, stops: candyStops()),
+            PaletteOption(name: "Aurora Borealis",  builtInIndex: nil, stops: auroraBorealisStops()),
+            PaletteOption(name: "Tropical",         builtInIndex: nil, stops: tropicalStopsNew()),
+            PaletteOption(name: "Flamingo",         builtInIndex: nil, stops: flamingoStopsNew()),
+            PaletteOption(name: "Lagoon",           builtInIndex: nil, stops: lagoonStopsNew()),
+            PaletteOption(name: "Cyberpunk",        builtInIndex: nil, stops: cyberpunkStops()),
+            PaletteOption(name: "Lava",             builtInIndex: nil, stops: lavaStops()),
+
+            // ——— Metallic / Shiny LUTs ———
+            PaletteOption(name: "Metallic Silver",  builtInIndex: nil, stops: metallicSilverStops()),
+            PaletteOption(name: "Chrome",           builtInIndex: nil, stops: chromeStops()),
+            PaletteOption(name: "Gold",             builtInIndex: nil, stops: goldStops()),
+            PaletteOption(name: "Rose Gold",        builtInIndex: nil, stops: roseGoldStops()),
+            PaletteOption(name: "Steel",            builtInIndex: nil, stops: steelStops()),
+            PaletteOption(name: "Bronze",           builtInIndex: nil, stops: bronzeStops()),
+            PaletteOption(name: "Copper",           builtInIndex: nil, stops: copperStops()),
+            PaletteOption(name: "Titanium",         builtInIndex: nil, stops: titaniumStops()),
+            PaletteOption(name: "Mercury",          builtInIndex: nil, stops: mercuryStops()),
+            PaletteOption(name: "Pewter",           builtInIndex: nil, stops: pewterStops()),
+            PaletteOption(name: "Iridescent",       builtInIndex: nil, stops: iridescentStops()),
+
+            // ——— Scientific / Utility LUTs ———
+            PaletteOption(name: "Magma",            builtInIndex: nil, stops: magmaStops()),
+            PaletteOption(name: "Inferno",          builtInIndex: nil, stops: infernoStops()),
+            PaletteOption(name: "Plasma",           builtInIndex: nil, stops: plasmaStops()),
+            PaletteOption(name: "Viridis",          builtInIndex: nil, stops: viridisStops()),
+            PaletteOption(name: "Turbo",            builtInIndex: nil, stops: turboStops()),
+            PaletteOption(name: "Cubehelix",        builtInIndex: nil, stops: cubehelixStops()),
+            PaletteOption(name: "Grayscale",        builtInIndex: nil, stops: grayscaleStops()),
+
+            // ——— Natural / Classic LUTs ———
+            PaletteOption(name: "Sunset",           builtInIndex: nil, stops: sunsetStops()),
+            PaletteOption(name: "Pastel",           builtInIndex: nil, stops: pastelStops()),
+            PaletteOption(name: "Aurora",           builtInIndex: nil, stops: auroraStops()),
+            PaletteOption(name: "Rainbow Smooth",   builtInIndex: nil, stops: rainbowSmoothStops()),
+            PaletteOption(name: "Earth",            builtInIndex: nil, stops: earthStops()),
+            PaletteOption(name: "Forest",           builtInIndex: nil, stops: forestStops()),
+            PaletteOption(name: "Ice",              builtInIndex: nil, stops: iceStops()),
+            PaletteOption(name: "Topo",             builtInIndex: nil, stops: topoStops()),
+
+            // ——— Gem / Extra Vivid LUTs ———
+            PaletteOption(name: "Sapphire",         builtInIndex: nil, stops: sapphireStops()),
+            PaletteOption(name: "Emerald",          builtInIndex: nil, stops: emeraldStops()),
+            PaletteOption(name: "Ruby",             builtInIndex: nil, stops: rubyStops()),
+            PaletteOption(name: "Amethyst",         builtInIndex: nil, stops: amethystStops()),
+            PaletteOption(name: "Citrine",          builtInIndex: nil, stops: citrineStops()),
+            PaletteOption(name: "Jade",             builtInIndex: nil, stops: jadeStops()),
+            PaletteOption(name: "Coral",            builtInIndex: nil, stops: coralStops()),
+            PaletteOption(name: "Midnight",         builtInIndex: nil, stops: midnightStops()),
+            PaletteOption(name: "Solar Flare",      builtInIndex: nil, stops: solarFlareStops()),
+            PaletteOption(name: "Glacier",          builtInIndex: nil, stops: glacierStops()),
+
+            // ——— GPU Built‑ins (match shader indices) ———
+            PaletteOption(name: "HSV",   builtInIndex: 0, stops: hsvStops()),
+            PaletteOption(name: "Fire",  builtInIndex: 1, stops: fireStops()),
+            PaletteOption(name: "Ocean", builtInIndex: 2, stops: oceanStops())
         ]
     }
 
@@ -427,38 +498,57 @@ struct ContentView: View {
         return UIImage(cgImage: cg)
     }
 
-    // Palette stop generators (simple, smooth approximations)
+    // Palette stop generators
     private func hsvStops() -> [(CGFloat, UIColor)] {
-        [ (0.00, UIColor.red), (0.17, UIColor.yellow), (0.33, UIColor.green), (0.50, UIColor.cyan), (0.67, UIColor.blue), (0.83, UIColor.magenta), (1.00, UIColor.red) ]
+        [ (0.00, .red), (0.17, .yellow), (0.33, .green), (0.50, .cyan), (0.67, .blue), (0.83, .magenta), (1.00, .red) ]
     }
     private func fireStops() -> [(CGFloat, UIColor)] {
-        [ (0.00, UIColor.black), (0.15, UIColor.red), (0.50, UIColor.orange), (0.85, UIColor.yellow), (1.00, UIColor.white) ]
+        [ (0.00, .black), (0.15, .red), (0.50, .orange), (0.85, .yellow), (1.00, .white) ]
     }
     private func oceanStops() -> [(CGFloat, UIColor)] {
-        [ (0.00, UIColor.black), (0.15, UIColor.blue), (0.45, UIColor.systemTeal), (0.75, UIColor.cyan), (1.00, UIColor.white) ]
+        [ (0.00, .black), (0.15, .blue), (0.45, .systemTeal), (0.75, .cyan), (1.00, .white) ]
     }
     private func magmaStops() -> [(CGFloat, UIColor)] {
-        [ (0.00, UIColor(red:0.001, green:0.000, blue:0.015, alpha:1)), (0.25, UIColor(red:0.090, green:0.022, blue:0.147, alpha:1)), (0.50, UIColor(red:0.355, green:0.110, blue:0.312, alpha:1)), (0.75, UIColor(red:0.722, green:0.235, blue:0.196, alpha:1)), (1.00, UIColor(red:0.987, green:0.940, blue:0.749, alpha:1)) ]
+        [ (0.00, UIColor(red:0.001, green:0.000, blue:0.015, alpha:1)),
+          (0.25, UIColor(red:0.090, green:0.022, blue:0.147, alpha:1)),
+          (0.50, UIColor(red:0.355, green:0.110, blue:0.312, alpha:1)),
+          (0.75, UIColor(red:0.722, green:0.235, blue:0.196, alpha:1)),
+          (1.00, UIColor(red:0.987, green:0.940, blue:0.749, alpha:1)) ]
     }
     private func infernoStops() -> [(CGFloat, UIColor)] {
-        [ (0.00, UIColor(red:0.001, green:0.000, blue:0.013, alpha:1)), (0.25, UIColor(red:0.102, green:0.019, blue:0.201, alpha:1)), (0.50, UIColor(red:0.591, green:0.125, blue:0.208, alpha:1)), (0.75, UIColor(red:0.949, green:0.526, blue:0.132, alpha:1)), (1.00, UIColor(red:0.988, green:0.998, blue:0.645, alpha:1)) ]
+        [ (0.00, UIColor(red:0.001, green:0.000, blue:0.013, alpha:1)),
+          (0.25, UIColor(red:0.102, green:0.019, blue:0.201, alpha:1)),
+          (0.50, UIColor(red:0.591, green:0.125, blue:0.208, alpha:1)),
+          (0.75, UIColor(red:0.949, green:0.526, blue:0.132, alpha:1)),
+          (1.00, UIColor(red:0.988, green:0.998, blue:0.645, alpha:1)) ]
     }
     private func plasmaStops() -> [(CGFloat, UIColor)] {
-        [ (0.00, UIColor(red:0.050, green:0.030, blue:0.527, alpha:1)), (0.25, UIColor(red:0.541, green:0.016, blue:0.670, alpha:1)), (0.50, UIColor(red:0.884, green:0.206, blue:0.380, alpha:1)), (0.75, UIColor(red:0.993, green:0.666, blue:0.237, alpha:1)), (1.00, UIColor(red:0.940, green:0.975, blue:0.131, alpha:1)) ]
+        [ (0.00, UIColor(red:0.050, green:0.030, blue:0.527, alpha:1)),
+          (0.25, UIColor(red:0.541, green:0.016, blue:0.670, alpha:1)),
+          (0.50, UIColor(red:0.884, green:0.206, blue:0.380, alpha:1)),
+          (0.75, UIColor(red:0.993, green:0.666, blue:0.237, alpha:1)),
+          (1.00, UIColor(red:0.940, green:0.975, blue:0.131, alpha:1)) ]
     }
     private func viridisStops() -> [(CGFloat, UIColor)] {
-        [ (0.00, UIColor(red:0.267, green:0.005, blue:0.329, alpha:1)), (0.25, UIColor(red:0.283, green:0.141, blue:0.458, alpha:1)), (0.50, UIColor(red:0.254, green:0.265, blue:0.530, alpha:1)), (0.75, UIColor(red:0.127, green:0.566, blue:0.550, alpha:1)), (1.00, UIColor(red:0.993, green:0.904, blue:0.144, alpha:1)) ]
+        [ (0.00, UIColor(red:0.267, green:0.005, blue:0.329, alpha:1)),
+          (0.25, UIColor(red:0.283, green:0.141, blue:0.458, alpha:1)),
+          (0.50, UIColor(red:0.254, green:0.265, blue:0.530, alpha:1)),
+          (0.75, UIColor(red:0.127, green:0.566, blue:0.550, alpha:1)),
+          (1.00, UIColor(red:0.993, green:0.904, blue:0.144, alpha:1)) ]
     }
     private func turboStops() -> [(CGFloat, UIColor)] {
-        [ (0.00, UIColor(red:0.189, green:0.071, blue:0.232, alpha:1)), (0.25, UIColor(red:0.216, green:0.460, blue:0.996, alpha:1)), (0.50, UIColor(red:0.500, green:0.891, blue:0.158, alpha:1)), (0.75, UIColor(red:0.994, green:0.760, blue:0.000, alpha:1)), (1.00, UIColor(red:0.498, green:0.054, blue:0.000, alpha:1)) ]
+        [ (0.00, UIColor(red:0.189, green:0.071, blue:0.232, alpha:1)),
+          (0.25, UIColor(red:0.216, green:0.460, blue:0.996, alpha:1)),
+          (0.50, UIColor(red:0.500, green:0.891, blue:0.158, alpha:1)),
+          (0.75, UIColor(red:0.994, green:0.760, blue:0.000, alpha:1)),
+          (1.00, UIColor(red:0.498, green:0.054, blue:0.000, alpha:1)) ]
     }
     private func cubehelixStops() -> [(CGFloat, UIColor)] {
-        [ (0.00, UIColor.black), (0.25, UIColor.darkGray), (0.50, UIColor.systemGreen), (0.75, UIColor.systemPurple), (1.00, UIColor.white) ]
+        [ (0.00, .black), (0.25, .darkGray), (0.50, .systemGreen), (0.75, .systemPurple), (1.00, .white) ]
     }
     private func grayscaleStops() -> [(CGFloat, UIColor)] {
-        [ (0.00, UIColor.black), (1.00, UIColor.white) ]
+        [ (0.00, .black), (1.00, .white) ]
     }
-
     private func sunsetStops() -> [(CGFloat, UIColor)] {
         [ (0.00, UIColor(red:0.10, green:0.02, blue:0.20, alpha:1)),
           (0.20, UIColor(red:0.35, green:0.02, blue:0.35, alpha:1)),
@@ -467,7 +557,6 @@ struct ContentView: View {
           (0.85, UIColor(red:1.00, green:0.75, blue:0.30, alpha:1)),
           (1.00, UIColor(red:1.00, green:0.95, blue:0.70, alpha:1)) ]
     }
-
     private func pastelStops() -> [(CGFloat, UIColor)] {
         [ (0.00, UIColor(red:0.90, green:0.95, blue:1.00, alpha:1)),
           (0.20, UIColor(red:0.86, green:0.92, blue:1.00, alpha:1)),
@@ -476,7 +565,6 @@ struct ContentView: View {
           (0.80, UIColor(red:0.98, green:0.95, blue:0.84, alpha:1)),
           (1.00, UIColor(red:0.90, green:0.98, blue:0.88, alpha:1)) ]
     }
-
     private func auroraStops() -> [(CGFloat, UIColor)] {
         [ (0.00, UIColor(red:0.02, green:0.03, blue:0.10, alpha:1)),
           (0.25, UIColor(red:0.00, green:0.40, blue:0.30, alpha:1)),
@@ -484,17 +572,9 @@ struct ContentView: View {
           (0.75, UIColor(red:0.40, green:0.85, blue:0.90, alpha:1)),
           (1.00, UIColor(red:0.85, green:0.95, blue:1.00, alpha:1)) ]
     }
-
     private func rainbowSmoothStops() -> [(CGFloat, UIColor)] {
-        [ (0.00, UIColor.red),
-          (0.17, UIColor.orange),
-          (0.33, UIColor.yellow),
-          (0.50, UIColor.green),
-          (0.67, UIColor.blue),
-          (0.83, UIColor.purple),
-          (1.00, UIColor.red) ]
+        [ (0.00, .red), (0.17, .orange), (0.33, .yellow), (0.50, .green), (0.67, .blue), (0.83, .purple), (1.00, .red) ]
     }
-
     private func earthStops() -> [(CGFloat, UIColor)] {
         [ (0.00, UIColor(red:0.14, green:0.08, blue:0.02, alpha:1)),
           (0.20, UIColor(red:0.25, green:0.16, blue:0.05, alpha:1)),
@@ -503,7 +583,6 @@ struct ContentView: View {
           (0.80, UIColor(red:0.70, green:0.55, blue:0.30, alpha:1)),
           (1.00, UIColor(red:0.90, green:0.82, blue:0.60, alpha:1)) ]
     }
-
     private func forestStops() -> [(CGFloat, UIColor)] {
         [ (0.00, UIColor(red:0.02, green:0.12, blue:0.02, alpha:1)),
           (0.25, UIColor(red:0.05, green:0.28, blue:0.10, alpha:1)),
@@ -511,7 +590,6 @@ struct ContentView: View {
           (0.75, UIColor(red:0.25, green:0.60, blue:0.32, alpha:1)),
           (1.00, UIColor(red:0.75, green:0.90, blue:0.70, alpha:1)) ]
     }
-
     private func iceStops() -> [(CGFloat, UIColor)] {
         [ (0.00, UIColor(red:0.00, green:0.07, blue:0.15, alpha:1)),
           (0.25, UIColor(red:0.10, green:0.34, blue:0.55, alpha:1)),
@@ -519,7 +597,6 @@ struct ContentView: View {
           (0.75, UIColor(red:0.75, green:0.92, blue:0.97, alpha:1)),
           (1.00, UIColor(red:0.95, green:0.98, blue:1.00, alpha:1)) ]
     }
-
     private func topoStops() -> [(CGFloat, UIColor)] {
         [ (0.00, UIColor(red:0.00, green:0.25, blue:0.50, alpha:1)),
           (0.15, UIColor(red:0.10, green:0.50, blue:0.75, alpha:1)),
@@ -531,6 +608,283 @@ struct ContentView: View {
           (1.00, UIColor(red:0.95, green:0.95, blue:0.95, alpha:1)) ]
     }
 
+    // --- New vivid palette stop generators ---
+    private func neonStops() -> [(CGFloat, UIColor)] {
+        [
+            (0.00, UIColor.black),
+            (0.08, UIColor(red:0.00, green:1.00, blue:0.70, alpha:1)),
+            (0.20, UIColor(red:0.00, green:0.80, blue:1.00, alpha:1)),
+            (0.35, UIColor(red:0.40, green:0.20, blue:1.00, alpha:1)),
+            (0.55, UIColor(red:1.00, green:0.10, blue:0.90, alpha:1)),
+            (0.75, UIColor(red:1.00, green:0.80, blue:0.10, alpha:1)),
+            (1.00, UIColor.white)
+        ]
+    }
+
+    private func vibrantStops() -> [(CGFloat, UIColor)] {
+        [
+            (0.00, UIColor(red:0.05, green:0.02, blue:0.15, alpha:1)),
+            (0.15, UIColor(red:0.20, green:0.00, blue:0.70, alpha:1)),
+            (0.35, UIColor(red:0.00, green:0.60, blue:1.00, alpha:1)),
+            (0.55, UIColor(red:0.00, green:0.90, blue:0.40, alpha:1)),
+            (0.75, UIColor(red:1.00, green:0.80, blue:0.00, alpha:1)),
+            (1.00, UIColor(red:1.00, green:0.15, blue:0.10, alpha:1))
+        ]
+    }
+
+    private func sunsetGlowStops() -> [(CGFloat, UIColor)] {
+        [
+            (0.00, UIColor(red:0.08, green:0.00, blue:0.15, alpha:1)),
+            (0.18, UIColor(red:0.40, green:0.00, blue:0.40, alpha:1)),
+            (0.38, UIColor(red:0.85, green:0.20, blue:0.40, alpha:1)),
+            (0.60, UIColor(red:1.00, green:0.54, blue:0.10, alpha:1)),
+            (0.82, UIColor(red:1.00, green:0.85, blue:0.25, alpha:1)),
+            (1.00, UIColor(red:1.00, green:0.98, blue:0.85, alpha:1))
+        ]
+    }
+
+    private func candyStops() -> [(CGFloat, UIColor)] {
+        [
+            (0.00, UIColor(red:0.10, green:0.00, blue:0.20, alpha:1)),
+            (0.20, UIColor(red:0.90, green:0.20, blue:0.75, alpha:1)),
+            (0.40, UIColor(red:1.00, green:0.40, blue:0.50, alpha:1)),
+            (0.60, UIColor(red:1.00, green:0.70, blue:0.30, alpha:1)),
+            (0.80, UIColor(red:0.90, green:0.95, blue:0.40, alpha:1)),
+            (1.00, UIColor(red:0.80, green:1.00, blue:0.95, alpha:1))
+        ]
+    }
+
+    private func auroraBorealisStops() -> [(CGFloat, UIColor)] {
+        [
+            (0.00, UIColor(red:0.00, green:0.02, blue:0.07, alpha:1)),
+            (0.18, UIColor(red:0.00, green:0.40, blue:0.35, alpha:1)),
+            (0.36, UIColor(red:0.00, green:0.75, blue:0.65, alpha:1)),
+            (0.58, UIColor(red:0.35, green:0.95, blue:0.90, alpha:1)),
+            (0.78, UIColor(red:0.60, green:0.85, blue:1.00, alpha:1)),
+            (1.00, UIColor(red:0.92, green:0.98, blue:1.00, alpha:1))
+        ]
+    }
+
+    private func tropicalStopsNew() -> [(CGFloat, UIColor)] { // renamed to avoid collision with existing helper
+        [
+            (0.00, UIColor(red:0.00, green:0.10, blue:0.22, alpha:1)),
+            (0.20, UIColor(red:0.00, green:0.55, blue:0.60, alpha:1)),
+            (0.40, UIColor(red:0.00, green:0.85, blue:0.60, alpha:1)),
+            (0.60, UIColor(red:0.95, green:0.80, blue:0.00, alpha:1)),
+            (0.80, UIColor(red:1.00, green:0.50, blue:0.00, alpha:1)),
+            (1.00, UIColor(red:0.90, green:0.10, blue:0.00, alpha:1))
+        ]
+    }
+
+    private func flamingoStopsNew() -> [(CGFloat, UIColor)] { // renamed to avoid collision
+        [
+            (0.00, UIColor(red:0.18, green:0.02, blue:0.20, alpha:1)),
+            (0.22, UIColor(red:0.80, green:0.10, blue:0.50, alpha:1)),
+            (0.44, UIColor(red:1.00, green:0.40, blue:0.70, alpha:1)),
+            (0.66, UIColor(red:1.00, green:0.70, blue:0.75, alpha:1)),
+            (0.88, UIColor(red:1.00, green:0.90, blue:0.90, alpha:1)),
+            (1.00, UIColor.white)
+        ]
+    }
+
+    private func lagoonStopsNew() -> [(CGFloat, UIColor)] { // renamed to avoid collision
+        [
+            (0.00, UIColor(red:0.00, green:0.04, blue:0.10, alpha:1)),
+            (0.18, UIColor(red:0.00, green:0.30, blue:0.60, alpha:1)),
+            (0.36, UIColor(red:0.00, green:0.62, blue:0.80, alpha:1)),
+            (0.62, UIColor(red:0.00, green:0.85, blue:0.75, alpha:1)),
+            (0.82, UIColor(red:0.50, green:0.98, blue:0.90, alpha:1)),
+            (1.00, UIColor.white)
+        ]
+    }
+
+    private func cyberpunkStops() -> [(CGFloat, UIColor)] {
+        [
+            (0.00, UIColor(red:0.04, green:0.00, blue:0.08, alpha:1)),
+            (0.20, UIColor(red:0.12, green:0.00, blue:0.55, alpha:1)),
+            (0.40, UIColor(red:0.55, green:0.00, blue:0.85, alpha:1)),
+            (0.60, UIColor(red:0.00, green:0.90, blue:0.95, alpha:1)),
+            (0.80, UIColor(red:1.00, green:0.20, blue:0.60, alpha:1)),
+            (1.00, UIColor(red:1.00, green:0.95, blue:0.90, alpha:1))
+        ]
+    }
+
+    private func lavaStops() -> [(CGFloat, UIColor)] {
+        [
+            (0.00, UIColor.black),
+            (0.18, UIColor(red:0.25, green:0.00, blue:0.00, alpha:1)),
+            (0.38, UIColor(red:0.65, green:0.00, blue:0.00, alpha:1)),
+            (0.58, UIColor(red:1.00, green:0.30, blue:0.00, alpha:1)),
+            (0.78, UIColor(red:1.00, green:0.70, blue:0.00, alpha:1)),
+            (1.00, UIColor.white)
+        ]
+    }
+
+    // ——— Metallic / Shiny ———
+    private func metallicSilverStops() -> [(CGFloat, UIColor)] {
+        [ (0.00, UIColor(white:0.05, alpha:1)),
+          (0.10, UIColor(white:0.30, alpha:1)),
+          (0.22, UIColor(white:0.85, alpha:1)),
+          (0.35, UIColor(white:0.35, alpha:1)),
+          (0.50, UIColor(white:0.92, alpha:1)),
+          (0.65, UIColor(white:0.40, alpha:1)),
+          (0.78, UIColor(white:0.88, alpha:1)),
+          (1.00, UIColor(white:0.15, alpha:1)) ]
+    }
+    private func chromeStops() -> [(CGFloat, UIColor)] {
+        [ (0.00, UIColor(white:0.02, alpha:1)),
+          (0.08, UIColor(white:0.25, alpha:1)),
+          (0.16, UIColor(white:0.95, alpha:1)),
+          (0.24, UIColor(white:0.20, alpha:1)),
+          (0.32, UIColor(white:0.98, alpha:1)),
+          (0.46, UIColor(white:0.18, alpha:1)),
+          (0.64, UIColor(white:0.96, alpha:1)),
+          (1.00, UIColor(white:0.10, alpha:1)) ]
+    }
+    private func goldStops() -> [(CGFloat, UIColor)] {
+        [ (0.00, UIColor(red:0.10, green:0.07, blue:0.00, alpha:1)),
+          (0.15, UIColor(red:0.55, green:0.38, blue:0.00, alpha:1)),
+          (0.35, UIColor(red:0.95, green:0.78, blue:0.10, alpha:1)),
+          (0.55, UIColor(red:1.00, green:0.88, blue:0.25, alpha:1)),
+          (0.75, UIColor(red:0.80, green:0.60, blue:0.05, alpha:1)),
+          (1.00, UIColor(red:0.20, green:0.15, blue:0.00, alpha:1)) ]
+    }
+    private func roseGoldStops() -> [(CGFloat, UIColor)] {
+        [ (0.00, UIColor(red:0.14, green:0.05, blue:0.05, alpha:1)),
+          (0.20, UIColor(red:0.60, green:0.30, blue:0.25, alpha:1)),
+          (0.40, UIColor(red:0.95, green:0.65, blue:0.55, alpha:1)),
+          (0.60, UIColor(red:1.00, green:0.80, blue:0.70, alpha:1)),
+          (0.80, UIColor(red:0.70, green:0.40, blue:0.35, alpha:1)),
+          (1.00, UIColor(red:0.18, green:0.08, blue:0.08, alpha:1)) ]
+    }
+    private func steelStops() -> [(CGFloat, UIColor)] {
+        [ (0.00, UIColor(white:0.05, alpha:1)),
+          (0.20, UIColor(white:0.25, alpha:1)),
+          (0.45, UIColor(white:0.70, alpha:1)),
+          (0.65, UIColor(white:0.35, alpha:1)),
+          (0.85, UIColor(white:0.80, alpha:1)),
+          (1.00, UIColor(white:0.12, alpha:1)) ]
+    }
+    private func bronzeStops() -> [(CGFloat, UIColor)] {
+        [ (0.00, UIColor(red:0.05, green:0.02, blue:0.00, alpha:1)),
+          (0.20, UIColor(red:0.40, green:0.20, blue:0.05, alpha:1)),
+          (0.45, UIColor(red:0.70, green:0.45, blue:0.15, alpha:1)),
+          (0.70, UIColor(red:0.48, green:0.28, blue:0.10, alpha:1)),
+          (0.90, UIColor(red:0.85, green:0.65, blue:0.35, alpha:1)),
+          (1.00, UIColor(red:0.15, green:0.08, blue:0.03, alpha:1)) ]
+    }
+    private func copperStops() -> [(CGFloat, UIColor)] {
+        [ (0.00, UIColor(red:0.07, green:0.02, blue:0.00, alpha:1)),
+          (0.20, UIColor(red:0.55, green:0.20, blue:0.05, alpha:1)),
+          (0.45, UIColor(red:0.90, green:0.45, blue:0.15, alpha:1)),
+          (0.65, UIColor(red:0.70, green:0.30, blue:0.10, alpha:1)),
+          (0.85, UIColor(red:1.00, green:0.70, blue:0.45, alpha:1)),
+          (1.00, UIColor(red:0.20, green:0.08, blue:0.03, alpha:1)) ]
+    }
+    private func titaniumStops() -> [(CGFloat, UIColor)] {
+        [ (0.00, UIColor(white:0.07, alpha:1)),
+          (0.18, UIColor(white:0.25, alpha:1)),
+          (0.36, UIColor(white:0.85, alpha:1)),
+          (0.54, UIColor(white:0.30, alpha:1)),
+          (0.72, UIColor(white:0.90, alpha:1)),
+          (1.00, UIColor(white:0.10, alpha:1)) ]
+    }
+    private func mercuryStops() -> [(CGFloat, UIColor)] {
+        [ (0.00, UIColor(white:0.03, alpha:1)),
+          (0.16, UIColor(white:0.25, alpha:1)),
+          (0.33, UIColor(white:0.98, alpha:1)),
+          (0.50, UIColor(white:0.20, alpha:1)),
+          (0.66, UIColor(white:0.96, alpha:1)),
+          (1.00, UIColor(white:0.08, alpha:1)) ]
+    }
+    private func pewterStops() -> [(CGFloat, UIColor)] {
+        [ (0.00, UIColor(white:0.06, alpha:1)),
+          (0.25, UIColor(white:0.22, alpha:1)),
+          (0.55, UIColor(white:0.65, alpha:1)),
+          (0.75, UIColor(white:0.32, alpha:1)),
+          (0.92, UIColor(white:0.78, alpha:1)),
+          (1.00, UIColor(white:0.14, alpha:1)) ]
+    }
+    private func iridescentStops() -> [(CGFloat, UIColor)] {
+        [ (0.00, UIColor(red:0.10, green:0.00, blue:0.20, alpha:1)),
+          (0.15, UIColor(red:0.00, green:0.65, blue:0.80, alpha:1)),
+          (0.30, UIColor(red:0.60, green:0.20, blue:1.00, alpha:1)),
+          (0.50, UIColor(red:1.00, green:0.40, blue:0.90, alpha:1)),
+          (0.70, UIColor(red:0.10, green:0.90, blue:0.60, alpha:1)),
+          (1.00, UIColor(red:0.95, green:0.95, blue:0.95, alpha:1)) ]
+    }
+
+    // ——— Gem / Extra Vivid ———
+    private func sapphireStops() -> [(CGFloat, UIColor)] {
+        [ (0.00, UIColor(red:0.00, green:0.02, blue:0.10, alpha:1)),
+          (0.20, UIColor(red:0.00, green:0.20, blue:0.60, alpha:1)),
+          (0.45, UIColor(red:0.10, green:0.45, blue:0.95, alpha:1)),
+          (0.75, UIColor(red:0.60, green:0.85, blue:1.00, alpha:1)),
+          (1.00, UIColor.white) ]
+    }
+    private func emeraldStops() -> [(CGFloat, UIColor)] {
+        [ (0.00, UIColor(red:0.00, green:0.05, blue:0.02, alpha:1)),
+          (0.20, UIColor(red:0.00, green:0.35, blue:0.18, alpha:1)),
+          (0.45, UIColor(red:0.00, green:0.75, blue:0.40, alpha:1)),
+          (0.75, UIColor(red:0.50, green:1.00, blue:0.75, alpha:1)),
+          (1.00, UIColor.white) ]
+    }
+    private func rubyStops() -> [(CGFloat, UIColor)] {
+        [ (0.00, UIColor(red:0.05, green:0.00, blue:0.02, alpha:1)),
+          (0.22, UIColor(red:0.50, green:0.00, blue:0.20, alpha:1)),
+          (0.46, UIColor(red:0.90, green:0.05, blue:0.25, alpha:1)),
+          (0.72, UIColor(red:1.00, green:0.50, blue:0.60, alpha:1)),
+          (1.00, UIColor.white) ]
+    }
+    private func amethystStops() -> [(CGFloat, UIColor)] {
+        [ (0.00, UIColor(red:0.04, green:0.00, blue:0.08, alpha:1)),
+          (0.25, UIColor(red:0.30, green:0.00, blue:0.60, alpha:1)),
+          (0.50, UIColor(red:0.70, green:0.25, blue:1.00, alpha:1)),
+          (0.80, UIColor(red:0.90, green:0.70, blue:1.00, alpha:1)),
+          (1.00, UIColor.white) ]
+    }
+    private func citrineStops() -> [(CGFloat, UIColor)] {
+        [ (0.00, UIColor(red:0.10, green:0.06, blue:0.00, alpha:1)),
+          (0.22, UIColor(red:0.70, green:0.45, blue:0.00, alpha:1)),
+          (0.46, UIColor(red:1.00, green:0.85, blue:0.10, alpha:1)),
+          (0.72, UIColor(red:1.00, green:0.95, blue:0.60, alpha:1)),
+          (1.00, UIColor.white) ]
+    }
+    private func jadeStops() -> [(CGFloat, UIColor)] {
+        [ (0.00, UIColor(red:0.00, green:0.06, blue:0.04, alpha:1)),
+          (0.26, UIColor(red:0.00, green:0.35, blue:0.30, alpha:1)),
+          (0.52, UIColor(red:0.00, green:0.85, blue:0.65, alpha:1)),
+          (0.78, UIColor(red:0.50, green:1.00, blue:0.90, alpha:1)),
+          (1.00, UIColor.white) ]
+    }
+    private func coralStops() -> [(CGFloat, UIColor)] {
+        [ (0.00, UIColor(red:0.10, green:0.02, blue:0.02, alpha:1)),
+          (0.20, UIColor(red:0.85, green:0.25, blue:0.25, alpha:1)),
+          (0.45, UIColor(red:1.00, green:0.55, blue:0.45, alpha:1)),
+          (0.75, UIColor(red:1.00, green:0.85, blue:0.70, alpha:1)),
+          (1.00, UIColor.white) ]
+    }
+    private func midnightStops() -> [(CGFloat, UIColor)] {
+        [ (0.00, UIColor(red:0.00, green:0.00, blue:0.02, alpha:1)),
+          (0.25, UIColor(red:0.00, green:0.02, blue:0.15, alpha:1)),
+          (0.50, UIColor(red:0.00, green:0.20, blue:0.45, alpha:1)),
+          (0.75, UIColor(red:0.20, green:0.45, blue:0.85, alpha:1)),
+          (1.00, UIColor.white) ]
+    }
+    private func solarFlareStops() -> [(CGFloat, UIColor)] {
+        [ (0.00, UIColor(red:0.05, green:0.02, blue:0.00, alpha:1)),
+          (0.22, UIColor(red:0.75, green:0.30, blue:0.00, alpha:1)),
+          (0.44, UIColor(red:1.00, green:0.70, blue:0.00, alpha:1)),
+          (0.70, UIColor(red:1.00, green:0.90, blue:0.40, alpha:1)),
+          (1.00, UIColor.white) ]
+    }
+    private func glacierStops() -> [(CGFloat, UIColor)] {
+        [ (0.00, UIColor(red:0.00, green:0.02, blue:0.05, alpha:1)),
+          (0.20, UIColor(red:0.00, green:0.30, blue:0.60, alpha:1)),
+          (0.45, UIColor(red:0.45, green:0.80, blue:1.00, alpha:1)),
+          (0.75, UIColor(red:0.85, green:0.95, blue:1.00, alpha:1)),
+          (1.00, UIColor.white) ]
+    }
 
     @ViewBuilder
     private func floatingControls(_ geo: GeometryProxy) -> some View {
@@ -545,11 +899,11 @@ struct ContentView: View {
                 .accessibilityLabel("Reset")
                 Spacer(minLength: 8)
                 Button(action: { saveCurrentSnapshot() }) {
-                    Image(systemName: "square.and.arrow.down")
-                        .imageScale(.large)
-                        .padding(8)
+                    Label("Save Image", systemImage: "square.and.arrow.down")
+                        .labelStyle(.titleAndIcon)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 6)
                 }
-                .accessibilityLabel("Save")
                 Button(action: { showOptionsSheet = true }) {
                     Label("Options", systemImage: "slider.horizontal.3")
                         .labelStyle(.iconOnly)
@@ -569,59 +923,77 @@ struct ContentView: View {
             .tint(.primary)
             .foregroundStyle(.primary)
         } else {
-            // Regular: two-row floating bar
-            VStack(spacing: 8) {
-                HStack(spacing: 16) {
-                    Button(action: { showAbout = true }) { Label("About", systemImage: "info.circle") }
-                    Button(action: { showHelp = true }) { Label("Help", systemImage: "questionmark.circle") }
-                    Button(action: { reset(geo.size) }) { Label("Reset", systemImage: "arrow.counterclockwise") }
-                    PhotosPicker(selection: $gradientItem, matching: .images) {
-                        Label("Import Gradient", systemImage: "photo.on.rectangle")
+            // Regular: polished two-row floating bar (grouped)
+            VStack(spacing: 10) {
+                let narrow = geo.size.width < 980
+                // Row 1 — Navigation • Modes • Iterations
+                HStack(alignment: .firstTextBaseline, spacing: narrow ? 12 : 18) {
+                    // Navigation
+                    Button(action: { reset(geo.size) }) {
+                        Label("Reset", systemImage: "arrow.counterclockwise")
                     }
-                    .onChange(of: gradientItem) { _, item in importGradientItem(item) }
+
+                    Divider().frame(height: 22).opacity(0.2)
+
+                    // Modes (aligned labeled toggles)
+                    HStack(spacing: 16) {
+                        LabeledToggle(title: "Perturb",  systemImage: "bolt.circle", isOn: $perturbation)
+                            .onChange(of: perturbation) { _, v in
+                                vm.renderer?.setPerturbation(v); vm.requestDraw()
+                            }
+                        LabeledToggle(title: "Deep Zoom", systemImage: "scope", isOn: $deepZoom)
+                            .onChange(of: deepZoom) { _, v in
+                                vm.renderer?.setDeepZoom(v); vm.requestDraw()
+                            }
+                        LabeledToggle(title: "Auto Iter", systemImage: "aqi.medium", isOn: $autoIterations)
+                    }
+
+                    Divider().frame(height: 22).opacity(0.2)
+
+                    // Iterations (slider + live value)
+                    HStack(spacing: 10) {
+                        Text("Iterations")
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.9)
+
+                        Slider(value: iterBinding, in: 100...12000, step: 100)
+                            .frame(width: min(max(geo.size.width * 0.25, 200), 360))
+
+                        Text(autoIterations ? "\(effectiveIterations) (auto)" : "\(vm.maxIterations)")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .monospacedDigit()
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.8)
+                    }
+                    .alignmentGuide(.firstTextBaseline) { d in d[.bottom] }
+
                     Spacer(minLength: 8)
+                }
+
+                // Row 2 — Color • Bookmarks • Export • Info
+                HStack(alignment: .center, spacing: narrow ? 12 : 18) {
+                    // Color
                     Button(action: { showPalettePicker = true }) {
                         HStack(spacing: 8) {
                             palettePreview(for: currentPaletteName)
-                                .frame(width: 64, height: 18)
+                                .frame(width: 72, height: 18)
                                 .clipShape(Capsule())
                                 .overlay(Capsule().strokeBorder(.white.opacity(0.2)))
                             Text("Palette")
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.85)
                         }
                     }
-                    Button(action: { saveCurrentSnapshot() }) { Label("Save", systemImage: "square.and.arrow.up") }
-                }
-                HStack(spacing: 16) {
-                    HStack(spacing: 8) {
-                        Toggle("", isOn: $perturbation)
-                            .labelsHidden()
-                            .toggleStyle(AccessibleSwitchToggleStyle())
-                            .onChange(of: perturbation) { _, v in
-                                vm.renderer?.setPerturbation(v)
-                                vm.requestDraw()
-                            }
-                        Label("Perturb", systemImage: "bolt.circle")
+
+                    PhotosPicker(selection: $gradientItem, matching: .images) {
+                        Label(narrow ? "Import" : "Import Gradient", systemImage: "photo.on.rectangle")
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.85)
                     }
-                    HStack(spacing: 8) {
-                        Toggle("", isOn: $deepZoom)
-                            .labelsHidden()
-                            .toggleStyle(AccessibleSwitchToggleStyle())
-                            .onChange(of: deepZoom) { _, v in
-                                vm.renderer?.setDeepZoom(v)
-                                vm.requestDraw()
-                            }
-                        Label("Deep Zoom", systemImage: "scope")
-                    }
-                    Stepper(value: $vm.maxIterations, in: 200...4000, step: 100, onEditingChanged: { _ in
-                        vm.renderer?.setMaxIterations(vm.maxIterations)
-                        vm.requestDraw()
-                    }) { Text(autoIterations ? "Iterations: \(effectiveIterations) (auto)" : "Iterations: \(vm.maxIterations)") }
-                    HStack(spacing: 8) {
-                        Toggle("", isOn: $autoIterations)
-                            .labelsHidden()
-                            .toggleStyle(AccessibleSwitchToggleStyle())
-                        Text("Auto Iter")
-                    }
+                    .onChange(of: gradientItem) { _, item in importGradientItem(item) }
+
+                    // Bookmarks
                     Menu("Bookmarks") {
                         Button("Add Current…") { newBookmarkName = ""; showAddBookmark = true }
                         if !bookmarks.isEmpty {
@@ -633,16 +1005,42 @@ struct ContentView: View {
                             Button("Clear All", role: .destructive) { bookmarks.removeAll(); saveBookmarks() }
                         }
                     }
-                    Menu("Resolution") {
-                        Picker("Resolution", selection: $snapRes) {
-                            ForEach(SnapshotRes.allCases) { opt in Text(opt.rawValue).tag(opt) }
+
+                    Spacer(minLength: 8) // push Export group + Info to the right
+
+                    // --- Export (Resolution next to Save) ---
+                    HStack(spacing: 12) {
+                        ResolutionSelector(selection: $snapRes)
+                            .fixedSize(horizontal: true, vertical: false)
+                            .frame(maxWidth: narrow ? 180 : 260)
+
+                        if snapRes == .custom {
+                            Button("Custom…") { showCustomRes = true }
                         }
-                        Button("Custom…") { showCustomRes = true }
+
+                        // Prominent, visible Save button
+                        Button(action: { saveCurrentSnapshot() }) {
+                            Label(narrow ? "Save" : "Save Image", systemImage: "square.and.arrow.down")
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.9)
+                                .frame(minWidth: narrow ? 110 : 140)
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .tint(.accentColor)                 // make it clearly filled
+                        .foregroundStyle(.white)            // ensure label/icon are readable
+                        .controlSize(.regular)
                     }
+                    .padding(.trailing, 4)
+
+                    // Info
+                    Menu {
+                        Button(action: { showAbout = true }) { Label("About", systemImage: "info.circle") }
+                        Button(action: { showHelp = true }) { Label("Help", systemImage: "questionmark.circle") }
+                    } label: { Label("Info", systemImage: "info.circle") }
                 }
             }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 10)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
             .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
             .overlay(
                 RoundedRectangle(cornerRadius: 16, style: .continuous)
@@ -651,13 +1049,28 @@ struct ContentView: View {
             .shadow(radius: 10)
             .tint(.primary)
             .foregroundStyle(.primary)
+            .compositingGroup()
+            .onChange(of: snapRes) { _, newValue in
+                if newValue == .custom { showCustomRes = true }
+            }
         }
     }
     
     private var effectiveIterations: Int {
-        // Use live scale (includes in-gesture magnification) so the HUD updates while pinching
         let liveScale = vm.scalePixelsPerUnit * pendingScale
         return autoIterations ? autoIterationsForScale(liveScale) : vm.maxIterations
+    }
+
+    // Move the binding out of the ViewBuilder to avoid type-checker blowups
+    private var iterBinding: Binding<Double> {
+        Binding<Double>(
+            get: { Double(vm.maxIterations) },
+            set: { newVal in
+                vm.maxIterations = Int(newVal.rounded())
+                vm.renderer?.setMaxIterations(vm.maxIterations)
+                vm.requestDraw()
+            }
+        )
     }
 
     private var hud: some View {
@@ -673,7 +1086,7 @@ struct ContentView: View {
                 .lineLimit(1)
                 .minimumScaleFactor(0.7)
                 .legibleText()
-            Text(String(format: "Scale: %.2fx", vm.scalePixelsPerUnit))
+            Text("Scale: \(fmtZoom(vm.scalePixelsPerUnit))x")
                 .font(compact ? Font.caption2 : Font.caption)
                 .monospaced()
                 .legibleText()
@@ -689,8 +1102,17 @@ struct ContentView: View {
                 .strokeBorder(.white.opacity(0.15))
         )
     }
-
     
+    private func fmtZoom(_ x: Double) -> String {
+        let f = NumberFormatter()
+        f.numberStyle = .decimal
+        f.usesGroupingSeparator = true
+        f.groupingSize = 3
+        f.minimumFractionDigits = 1
+        f.maximumFractionDigits = 1
+        return f.string(from: x as NSNumber) ?? String(format: "%.1f", x)
+    }
+
     private func panAndZoom(_ size: CGSize) -> some Gesture {
         let pinch = MagnificationGesture()
             .onChanged { value in
@@ -717,7 +1139,7 @@ struct ContentView: View {
         let factor = Double(value)
         vm.scalePixelsPerUnit *= factor
         pendingScale = 1.0
-        vm.pushViewport(size, screenScale: UIScreen.main.scale)
+        vm.pushViewport(currentPointsSize(size), screenScale: currentScreenScale())
         if autoIterations {
             vm.renderer?.setMaxIterations(autoIterationsForScale(vm.scalePixelsPerUnit))
         }
@@ -727,7 +1149,7 @@ struct ContentView: View {
     private func applyDrag(_ value: DragGesture.Value, size: CGSize) {
         vm.center += dragToComplex(value.translation)
         pendingCenter = .zero
-        vm.pushViewport(size, screenScale: UIScreen.main.scale)
+        vm.pushViewport(currentPointsSize(size), screenScale: currentScreenScale())
         if autoIterations {
             vm.renderer?.setMaxIterations(autoIterationsForScale(vm.scalePixelsPerUnit))
         }
@@ -735,11 +1157,28 @@ struct ContentView: View {
     }
     
     private func autoIterationsForScale(_ scale: Double) -> Int {
-        let base = vm.maxIterations
-        let mag = max(1.0, scale / max(1e-9, vm.baselineScale))
-        let boost = Int(400.0 * log10(mag)) // +400 per 10× zoom beyond baseline
-        let target = base + max(0, boost)
-        return min(12_000, max(base, target))
+        let base: Int = vm.maxIterations
+
+        // Guard against tiny/NaN baselines in separate steps
+        let baseline: Double = max(1e-9, vm.baselineScale)
+        let ratio: Double = scale / baseline
+        let clampedRatio: Double = max(1.0, ratio)
+        let L: Double = max(0.0, log10(clampedRatio)) // decades beyond baseline
+
+        // Tunables (typed)
+        let startBoost: Double = 250.0
+        let slope: Double      = 900.0   // per 10×
+        let quad: Double       = 350.0   // grows with L^2
+
+        // Split the boost pieces so the type-checker doesn’t expand a giant tree
+        let linearPart: Double = slope * L
+        let quadPart: Double   = quad * (L * L)
+        let rawBoost: Double   = startBoost + linearPart + quadPart
+        let boost: Int         = max(0, Int(rawBoost.rounded()))
+
+        let target: Int = base + boost
+        let capped: Int = min(50_000, max(base, target))
+        return capped
     }
     
     private func liveUpdate(size: CGSize) {
@@ -752,16 +1191,19 @@ struct ContentView: View {
         let it = autoIterations ? autoIterationsForScale(scale) : vm.maxIterations
         vm.renderer?.setViewport(center: center,
                                  scalePixelsPerUnit: scale,
-                                 sizePts: size,
-                                 screenScale: UIScreen.main.scale,
+                                 sizePts: currentPointsSize(size),
+                                 screenScale: currentScreenScale(),
                                  maxIterations: it)
         vm.requestDraw()
     }
     
     private func doubleTapZoom(point: CGPoint, size: CGSize, factor: Double) {
-        let s = Double(UIScreen.main.scale)
-        let pixelW = Double(size.width) * s
-        let pixelH = Double(size.height) * s
+        let ds = vm.mtkView?.drawableSize
+        let pxW = ds?.width ?? floor(size.width * currentScreenScale())
+        let pxH = ds?.height ?? floor(size.height * currentScreenScale())
+        let s = Double(pxW / size.width)   // pixels-per-point actually in use
+        let pixelW = Double(pxW)
+        let pixelH = Double(pxH)
         let invScale = 1.0 / vm.scalePixelsPerUnit
         
         let halfW = 0.5 * pixelW
@@ -777,14 +1219,17 @@ struct ContentView: View {
         let cyAfter = (Double(point.y) * s - halfH) * invScaleAfter + vm.center.y
         
         vm.center += SIMD2<Double>(cxBefore - cxAfter, cyBefore - cyAfter)
-        vm.pushViewport(size, screenScale: UIScreen.main.scale)
+        vm.pushViewport(currentPointsSize(size), screenScale: currentScreenScale())
         vm.requestDraw()
     }
 
     private func recenterAtTap(_ point: CGPoint, size: CGSize) {
-        let s = Double(UIScreen.main.scale)
-        let pixelW = Double(size.width) * s
-        let pixelH = Double(size.height) * s
+        let ds = vm.mtkView?.drawableSize
+        let pxW = ds?.width ?? floor(size.width * currentScreenScale())
+        let pxH = ds?.height ?? floor(size.height * currentScreenScale())
+        let s = Double(pxW / size.width)
+        let pixelW = Double(pxW)
+        let pixelH = Double(pxH)
         let invScale = 1.0 / vm.scalePixelsPerUnit
         let halfW = 0.5 * pixelW
         let halfH = 0.5 * pixelH
@@ -800,7 +1245,7 @@ struct ContentView: View {
         palette = bm.palette
         deepZoom = bm.deep
         perturbation = bm.perturb
-        vm.pushViewport(size, screenScale: UIScreen.main.scale)
+        vm.pushViewport(currentPointsSize(size), screenScale: currentScreenScale())
         vm.renderer?.setPalette(palette)
         vm.renderer?.setDeepZoom(deepZoom)
         vm.renderer?.setPerturbation(perturbation)
@@ -809,14 +1254,24 @@ struct ContentView: View {
     }
     
     private func reset(_ size: CGSize) {
+        // Viewport back to default
         vm.center = SIMD2(-0.5, 0.0)
         vm.scalePixelsPerUnit = 1
-        vm.pushViewport(size, screenScale: UIScreen.main.scale)
+
+        // Reset iterations to minimum and restart auto-iter baseline
+        vm.maxIterations = 100
+        vm.baselineScale = 1   // so autoIterations recalibrates from the new start
+
+        // Apply to renderer immediately
+        vm.renderer?.setMaxIterations(vm.maxIterations)
+
+        // Push + draw
+        vm.pushViewport(currentPointsSize(size), screenScale: currentScreenScale())
         vm.requestDraw()
     }
     
     private func dragToComplex(_ translation: CGSize) -> SIMD2<Double> {
-        let s = UIScreen.main.scale
+        let s = currentScreenScale()
         let dx = Double(translation.width)  * Double(s)
         let dy = Double(translation.height) * Double(s)
         let invScale = 1.0 / vm.scalePixelsPerUnit
@@ -900,20 +1355,11 @@ struct ContentView: View {
             snapshotURL = url
             snapshotImage = nil
             shareItems = [url]
-            DispatchQueue.main.async {
-                showShare = true
-            }
-            print("[UI] wrote snapshot -> \(url.lastPathComponent)")
 
-            // ALSO save to the user's Photos library (add-only permission)
-            PhotoSaver.shared.saveToPhotos(img) { result in
-                switch result {
-                case .success:
-                    print("✅ Saved to Photos")
-                case .failure(let err):
-                    print("❌ Photos save failed: \(err)")
-                }
-            }
+            // present share sheet; user can choose “Save Image” if they want Photos
+            DispatchQueue.main.async { showShare = true }
+
+            print("[UI] wrote snapshot -> \(url.lastPathComponent)")
         } catch {
             print("[UI] failed to write snapshot: \(error)")
         }
@@ -923,7 +1369,6 @@ struct ContentView: View {
         if let s = Bundle.main.object(forInfoDictionaryKey: "NSHumanReadableCopyright") as? String, !s.isEmpty {
             return s
         }
-        // Fallback if the key is missing
         let year = Calendar.current.component(.year, from: Date())
         return "© \(year) Michael Stebel. All rights reserved."
     }
@@ -974,7 +1419,23 @@ struct AccessibleSwitchToggleStyle: ToggleStyle {
             .frame(width: width, height: height)
         }
         .buttonStyle(.plain)
-        .accessibilityValue(isOn ? Text("On") : Text("Off"))
+        .accessibilityValue(isOn ? "On" : "Off")
+    }
+}
+
+// Small helper to align a switch with its label and icon consistently
+private struct LabeledToggle: View {
+    let title: String
+    let systemImage: String
+    @Binding var isOn: Bool
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Toggle("", isOn: $isOn)
+                .labelsHidden()
+                .toggleStyle(AccessibleSwitchToggleStyle())
+            Label(title, systemImage: systemImage)
+        }
     }
 }
 
@@ -1167,7 +1628,24 @@ private struct PaletteSwatchButton: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel(Text(option.name))
-        .accessibilityAddTraits(selected ? .isSelected : AccessibilityTraits())
+        .accessibilityAddTraits(selected ? .isSelected : [])
+    }
+}
+
+// MARK: - Resolution Selector (Segmented)
+private struct ResolutionSelector: View {
+    @Binding var selection: ContentView.SnapshotRes
+
+    var body: some View {
+        Picker("Resolution", selection: $selection) {
+            Text("4K").tag(ContentView.SnapshotRes.r4k)
+            Text("6K").tag(ContentView.SnapshotRes.r6k)
+            Text("8K").tag(ContentView.SnapshotRes.r8k)
+            Text("Custom").tag(ContentView.SnapshotRes.custom)
+        }
+        .pickerStyle(.segmented)
+        .lineLimit(1)
+        .minimumScaleFactor(0.95)
     }
 }
 
@@ -1179,7 +1657,8 @@ private struct CompactOptionsSheet: View {
     @Binding var iterations: Int
     @Binding var perturbation: Bool
     @Binding var deepZoom: Bool
-
+    @Binding var snapRes: ContentView.SnapshotRes
+    
     let paletteOptions: [ContentView.PaletteOption]
     let applyPalette: (ContentView.PaletteOption) -> Void
     let onImportGradient: (PhotosPickerItem?) -> Void
@@ -1187,11 +1666,12 @@ private struct CompactOptionsSheet: View {
     let onAbout: () -> Void
     let onHelp: () -> Void
     let onClose: () -> Void
+    let onCustom: () -> Void
 
     @State private var localGradientItem: PhotosPickerItem? = nil
 
     var body: some View {
-        NavigationView {
+        NavigationStack {
             List {
                 Section {
                     HStack {
@@ -1213,7 +1693,7 @@ private struct CompactOptionsSheet: View {
                 }
 
                 Section {
-                    Stepper(value: $iterations, in: 200...12000, step: 100) {
+                    Stepper(value: $iterations, in: 100...12000, step: 100) {
                         Text(autoIterations ? "Iterations: \(iterations) (auto)" : "Iterations: \(iterations)")
                     }
                     HStack {
@@ -1252,25 +1732,28 @@ private struct CompactOptionsSheet: View {
                 }
 
                 Section {
-                    Button {
-                        onSave()
-                    } label: {
-                        HStack {
-                            Image(systemName: "square.and.arrow.down")
-                            Text("Save Image")
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack(spacing: 10) {
+                            ResolutionSelector(selection: $snapRes)
+                            if snapRes == .custom {
+                                Button("Custom…") { onCustom() }
+                            }
                         }
+                        Button {
+                            onSave()
+                        } label: {
+                            Label("Save Image", systemImage: "square.and.arrow.down")
+                                .frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(.borderedProminent)
                     }
                 } header: {
                     Text("Export")
                 }
 
                 Section {
-                    Button {
-                        onAbout()
-                    } label: { Label("About", systemImage: "info.circle") }
-                    Button {
-                        onHelp()
-                    } label: { Label("Help", systemImage: "questionmark.circle") }
+                    Button { onAbout() } label: { Label("About", systemImage: "info.circle") }
+                    Button { onHelp() } label: { Label("Help", systemImage: "questionmark.circle") }
                 } header: {
                     Text("Info")
                 }
