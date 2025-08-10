@@ -158,6 +158,7 @@ struct ContentView: View {
     @State private var showHelp = false
     @State private var autoIterations = false
     @State private var showOptionsSheet = false
+    @State private var showCaptureSheet = false
     struct Bookmark: Codable, Identifiable { var id = UUID(); var name: String; var center: SIMD2<Double>; var scale: Double; var palette: Int; var deep: Bool; var perturb: Bool }
     @State private var bookmarks: [Bookmark] = []
     @State private var showAddBookmark = false
@@ -253,6 +254,16 @@ struct ContentView: View {
             .sheet(isPresented: $showShare) {
                 ShareSheet(items: shareItems)
             }
+            .sheet(isPresented: $showCaptureSheet) {
+                CaptureSheet(
+                    snapRes: $snapRes,
+                    customW: $customW,
+                    customH: $customH,
+                    onConfirm: { saveCurrentSnapshot() },
+                    onClose: { showCaptureSheet = false },
+                    onCustomTap: { showCustomRes = true }
+                )
+            }
             .sheet(isPresented: $showCustomRes) {
                 NavigationStack {
                     Form {
@@ -326,7 +337,7 @@ struct ContentView: View {
                         gradientItem = item
                         importGradientItem(item)
                     },
-                    onSave: { saveCurrentSnapshot() },
+                    onSave: { showCaptureSheet = true },
                     onAbout: { showAbout = true },
                     onHelp: { showHelp = true },
                     onClose: { showOptionsSheet = false },
@@ -898,8 +909,8 @@ struct ContentView: View {
                 }
                 .accessibilityLabel("Reset")
                 Spacer(minLength: 8)
-                Button(action: { saveCurrentSnapshot() }) {
-                    Label("Save Image", systemImage: "square.and.arrow.down")
+                Button(action: { showCaptureSheet = true }) {
+                    Label("Capture", systemImage: "camera")
                         .labelStyle(.titleAndIcon)
                         .padding(.horizontal, 8)
                         .padding(.vertical, 6)
@@ -1008,29 +1019,17 @@ struct ContentView: View {
 
                     Spacer(minLength: 8) // push Export group + Info to the right
 
-                    // --- Export (Resolution next to Save) ---
-                    HStack(spacing: 12) {
-                        ResolutionSelector(selection: $snapRes)
-                            .fixedSize(horizontal: true, vertical: false)
-                            .frame(maxWidth: narrow ? 180 : 260)
-
-                        if snapRes == .custom {
-                            Button("Custom…") { showCustomRes = true }
-                        }
-
-                        // Prominent, visible Save button
-                        Button(action: { saveCurrentSnapshot() }) {
-                            Label(narrow ? "Save" : "Save Image", systemImage: "square.and.arrow.down")
-                                .lineLimit(1)
-                                .minimumScaleFactor(0.9)
-                                .frame(minWidth: narrow ? 110 : 140)
-                        }
-                        .buttonStyle(.borderedProminent)
-                        .tint(.accentColor)                 // make it clearly filled
-                        .foregroundStyle(.white)            // ensure label/icon are readable
-                        .controlSize(.regular)
+                    // --- Capture (opens a dialog with resolution) ---
+                    Button(action: { showCaptureSheet = true }) {
+                        Label(narrow ? "Capture" : "Capture Image", systemImage: "camera")
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.9)
+                            .frame(minWidth: narrow ? 110 : 140)
                     }
-                    .padding(.trailing, 4)
+                    .buttonStyle(.borderedProminent)
+                    .tint(.accentColor)
+                    .foregroundStyle(.white)
+                    .controlSize(.regular)
 
                     // Info
                     Menu {
@@ -1732,23 +1731,15 @@ private struct CompactOptionsSheet: View {
                 }
 
                 Section {
-                    VStack(alignment: .leading, spacing: 8) {
-                        HStack(spacing: 10) {
-                            ResolutionSelector(selection: $snapRes)
-                            if snapRes == .custom {
-                                Button("Custom…") { onCustom() }
-                            }
-                        }
-                        Button {
-                            onSave()
-                        } label: {
-                            Label("Save Image", systemImage: "square.and.arrow.down")
-                                .frame(maxWidth: .infinity)
-                        }
-                        .buttonStyle(.borderedProminent)
+                    Button {
+                        onSave() // opens Capture sheet
+                    } label: {
+                        Label("Capture Image", systemImage: "camera")
+                            .frame(maxWidth: .infinity)
                     }
+                    .buttonStyle(.borderedProminent)
                 } header: {
-                    Text("Export")
+                    Text("Capture")
                 }
 
                 Section {
@@ -1765,6 +1756,56 @@ private struct CompactOptionsSheet: View {
                     Button("Close") { onClose() }
                 }
             }
+        }
+    }
+}
+
+// MARK: - Capture Sheet
+private struct CaptureSheet: View {
+    @Binding var snapRes: ContentView.SnapshotRes
+    @Binding var customW: String
+    @Binding var customH: String
+    let onConfirm: () -> Void
+    let onClose: () -> Void
+    let onCustomTap: () -> Void
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section(header: Text("Resolution")) {
+                    ResolutionSelector(selection: $snapRes)
+                    if snapRes == .custom {
+                        HStack {
+                            TextField("Width",  text: $customW).keyboardType(.numberPad)
+                            Text("×")
+                            TextField("Height", text: $customH).keyboardType(.numberPad)
+                        }
+                    } else {
+                        Text(resolutionLabel).foregroundStyle(.secondary)
+                    }
+                }
+                Section {
+                    Button {
+                        onConfirm()
+                        onClose()
+                    } label: {
+                        Label("Capture", systemImage: "camera")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.borderedProminent)
+                }
+            }
+            .navigationTitle("Capture Image")
+            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Close") { onClose() } } }
+        }
+    }
+
+    private var resolutionLabel: String {
+        switch snapRes {
+        case .r4k: return "3840 × 2160"
+        case .r6k: return "5760 × 3240"
+        case .r8k: return "7680 × 4320"
+        case .custom: return ""
         }
     }
 }
