@@ -156,6 +156,7 @@ struct MetalFractalView: UIViewRepresentable {
 struct ContentView: View {
     @Environment(\.horizontalSizeClass) private var hSize
     @Environment(\.verticalSizeClass) private var vSize
+    @Environment(\.scenePhase) private var scenePhase
     @StateObject private var vm = FractalVM()
     @State private var pendingCenter = SIMD2<Double>(0, 0)
     @State private var pendingScale  = 1.0
@@ -172,6 +173,7 @@ struct ContentView: View {
     @State private var autoIterations = false
     @State private var showOptionsSheet = false
     @State private var showCaptureSheet = false
+    @State private var isCapturing = false
     struct Bookmark: Codable, Identifiable { var id = UUID(); var name: String; var center: SIMD2<Double>; var scale: Double; var palette: Int; var deep: Bool; var perturb: Bool }
     @State private var bookmarks: [Bookmark] = []
     @State private var showAddBookmark = false
@@ -180,17 +182,18 @@ struct ContentView: View {
     @State private var fallbackObserver: NSObjectProtocol? = nil
 
     enum SnapshotRes: String, CaseIterable, Identifiable {
-        case r4k="4K (3840×2160)",
-             r6k="6K (5760×3240)",
-             r8k="8K (7680×4320)",
-             custom="Custom…"; var id: String {
-                 rawValue
-             }
+        case canvas = "Canvas"
+        case r4k    = "4K (3840×2160)"
+        case r6k    = "6K (5760×3240)"
+        case r8k    = "8K (7680×4320)"
+        case custom = "Custom…"
+        var id: String { rawValue }
     }
     @State private var snapRes: SnapshotRes = .r4k
     @State private var customW: String = "3840"
     @State private var customH: String = "2160"
     @State private var showCustomRes = false
+    private let kPaletteNameKey = "palette_name_v1"
     
     var body: some View {
         GeometryReader { geo in
@@ -214,6 +217,20 @@ struct ContentView: View {
                     .padding(.horizontal, 12)
                     .padding(.bottom, 8)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+                // Progress overlay during capture
+                if isCapturing {
+                    VStack(spacing: 12) {
+                        ProgressView("Rendering…")
+                            .progressViewStyle(.circular)
+                        Text("Preparing image, please wait")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(20)
+                    .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(.white.opacity(0.15)))
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+                }
             }
             .onAppear {
                 if let s = vm.loadState() {
@@ -222,9 +239,17 @@ struct ContentView: View {
                 }
                 vm.pushViewport(currentPointsSize(geo.size), screenScale: currentScreenScale())
                 vm.requestDraw()
-                vm.renderer?.setPalette(palette)
                 vm.renderer?.setDeepZoom(true)
-                currentPaletteName = (palette == 0 ? "HSV" : palette == 1 ? "Fire" : palette == 2 ? "Ocean" : currentPaletteName)
+
+                // Restore palette by saved name if available; otherwise fall back to index
+                if let savedName = UserDefaults.standard.string(forKey: kPaletteNameKey),
+                   let opt = paletteOptions.first(where: { $0.name == savedName }) {
+                    applyPaletteOption(opt) // rebuild LUT or select GPU built‑in
+                } else {
+                    vm.renderer?.setPalette(palette)
+                    currentPaletteName = (palette == 0 ? "HSV" : palette == 1 ? "Fire" : palette == 2 ? "Ocean" : currentPaletteName)
+                    vm.requestDraw()
+                }
                 loadBookmarks()
                 // Listen for renderer fallbacks (perturbation/LUT resource issues)
                 fallbackObserver = NotificationCenter.default.addObserver(forName: .MandelbrotRendererFallback, object: nil, queue: .main) { note in
@@ -245,10 +270,16 @@ struct ContentView: View {
             .onChange(of: geo.size) { _, newSize in
                 vm.pushViewport(currentPointsSize(newSize), screenScale: currentScreenScale())
             }
-            .onChange(of: palette)                 { vm.saveState(perturb: false, deep: true, palette: palette) }
+            .onChange(of: palette) { persistPaletteSelection() }
+            .onChange(of: currentPaletteName) { _ in persistPaletteSelection() }
             .onChange(of: vm.center)               { vm.saveState(perturb: false, deep: true, palette: palette) }
             .onChange(of: vm.scalePixelsPerUnit)   { vm.saveState(perturb: false, deep: true, palette: palette) }
             .onChange(of: vm.maxIterations)        { vm.saveState(perturb: false, deep: true, palette: palette) }
+            .onChange(of: scenePhase) { newPhase in
+                if newPhase == .background {
+                    persistPaletteSelection()
+                }
+            }
             .toolbar { }
             .sheet(isPresented: $showPalettePicker) {
                 NavigationStack {
@@ -356,6 +387,11 @@ struct ContentView: View {
         }
     }
     
+    private func persistPaletteSelection() {
+        UserDefaults.standard.set(currentPaletteName, forKey: kPaletteNameKey)
+        vm.saveState(perturb: false, deep: true, palette: palette)
+    }
+
     private func currentScreenScale() -> CGFloat {
         if let v = vm.mtkView {
             let ptsW = v.bounds.size.width
@@ -905,13 +941,21 @@ struct ContentView: View {
                         .padding(8)
                 }
                 .accessibilityLabel("Reset")
+                .disabled(isCapturing)
                 Spacer(minLength: 8)
-                Button(action: { showCaptureSheet = true }) {
+                Button(action: { openCaptureSheet() }) {
                     Label("Capture", systemImage: "camera")
                         .labelStyle(.titleAndIcon)
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 6)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.9)
+                        .frame(minWidth: 120, alignment: .center)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 8)
                 }
+                .buttonStyle(.borderedProminent)
+                .tint(.accentColor)
+                .foregroundStyle(.white)
+                .disabled(isCapturing)
                 Button(action: { showOptionsSheet = true }) {
                     Label("Options", systemImage: "slider.horizontal.3")
                         .labelStyle(.iconOnly)
@@ -940,6 +984,7 @@ struct ContentView: View {
                     Button(action: { reset(geo.size) }) {
                         Label("Reset", systemImage: "arrow.counterclockwise")
                     }
+                    .disabled(isCapturing)
 
                     Divider().frame(height: 22).opacity(0.2)
 
@@ -1028,16 +1073,17 @@ struct ContentView: View {
                     Spacer(minLength: 8) // push Export group + Info to the right
 
                     // --- Capture (opens a dialog with resolution) ---
-                    Button(action: { showCaptureSheet = true }) {
+                    Button(action: { openCaptureSheet() }) {
                         Label(narrow ? "Capture" : "Capture Image", systemImage: "camera")
                             .lineLimit(1)
                             .minimumScaleFactor(0.9)
-                            .frame(minWidth: narrow ? 110 : 140)
+                            .frame(minWidth: narrow ? 140 : 160, alignment: .center)
                     }
                     .buttonStyle(.borderedProminent)
                     .tint(.accentColor)
                     .foregroundStyle(.white)
                     .controlSize(.regular)
+                    .disabled(isCapturing)
 
                     // Info
                     Menu {
@@ -1060,6 +1106,7 @@ struct ContentView: View {
             .onChange(of: snapRes) { _, newValue in
                 if newValue == .custom { showCustomRes = true }
             }
+            .disabled(isCapturing)
         }
     }
     
@@ -1297,70 +1344,130 @@ struct ContentView: View {
         }
     }
 
+    private func commitPendingInteractions(_ size: CGSize) {
+        // Fold any in-flight gestures into the model so snapshots use the latest view
+        if pendingScale != 1.0 || pendingCenter != .zero {
+            vm.center += pendingCenter
+            vm.scalePixelsPerUnit *= pendingScale
+            pendingCenter = .zero
+            pendingScale = 1.0
+
+            // Recompute iterations if auto is enabled
+            if autoIterations {
+                let it = autoIterationsForScale(vm.scalePixelsPerUnit)
+                vm.maxIterations = it
+                vm.renderer?.setMaxIterations(it)
+            }
+            // Ensure renderer matches the current maxIterations before pushing viewport
+            vm.renderer?.setMaxIterations(vm.maxIterations)
+            // Push the updated viewport to the renderer immediately
+            vm.pushViewport(currentPointsSize(size), screenScale: currentScreenScale())
+            vm.requestDraw()
+        }
+    }
+
     private func saveCurrentSnapshot() {
-        // Determine output dimensions from picker
+        guard let renderer = vm.renderer else {
+            print("[UI] renderer is nil — cannot snapshot")
+            isCapturing = false
+            return
+        }
+        if isCapturing { print("[UI] capture already in progress — ignoring"); return }
+        
+        // Show HUD right away
+        isCapturing = true
+        print("[UI] saveCurrentSnapshot() starting…")
+        
+        // Resolve target dimensions from picker
         let dims: (Int, Int)
         switch snapRes {
-        case .r4k: dims = (3840, 2160)
-        case .r6k: dims = (5760, 3240)
-        case .r8k: dims = (7680, 4320)
+        case .canvas:
+            dims = (Int(customW) ?? 3840, Int(customH) ?? 2160)
+        case .r4k:
+            dims = (3840, 2160)
+        case .r6k:
+            dims = (5760, 3240)
+        case .r8k:
+            dims = (7680, 4320)
         case .custom:
-            let w = Int(customW) ?? 3840
-            let h = Int(customH) ?? 2160
-            dims = (w, h)
+            dims = (Int(customW) ?? 3840, Int(customH) ?? 2160)
         }
-        let w = dims.0
-        let h = dims.1
-
-        // Choose tiled path for very large images
-        let totalPixels = w * h
-        let useTiled = totalPixels > (3840 * 2160)
-
-        var image: UIImage? = nil
-        if useTiled {
-            image = vm.renderer?.makeSnapshotTiled(width: w,
-                                                   height: h,
-                                                   tile: 1024,
-                                                   center: vm.center,
-                                                   scalePixelsPerUnit: vm.scalePixelsPerUnit,
-                                                   iterations: vm.maxIterations)
-        } else {
-            image = vm.renderer?.makeSnapshot(width: w,
-                                              height: h,
-                                              center: vm.center,
-                                              scalePixelsPerUnit: vm.scalePixelsPerUnit,
-                                              iterations: vm.maxIterations)
-        }
-
-        guard let img = image else { print("[UI] snapshot failed (nil image)"); return }
+        let (w, h) = dims
+        
+        // 1) Commit any in-flight pan/zoom before saving (main thread)
+        let commitSize = vm.mtkView?.bounds.size ?? UIScreen.main.bounds.size
+        commitPendingInteractions(commitSize)
+        
+        // 2) Ensure palette & effective iterations match the view (main thread)
+        renderer.setPalette(palette)
+        let effectiveIters = autoIterations ? autoIterationsForScale(vm.scalePixelsPerUnit) : vm.maxIterations
+        let exportIters = min(2_500, max(100, effectiveIters)) // clamp to keep capture snappy
+        vm.maxIterations = exportIters
+        renderer.setMaxIterations(exportIters)
+        
+        // Immutable snapshot of state AFTER the commit
+        let snapCenter = vm.center
+        let snapScale  = vm.scalePixelsPerUnit
+        let t0 = CACurrentMediaTime()
+        
+        // 3) Start async capture (tiles always; avoids big single allocations)
+        renderer.captureAsyncTiled(
+            width: w,
+            height: h,
+            tile: 256,
+            center: snapCenter,
+            scalePixelsPerUnit: snapScale,
+            iterations: exportIters,
+            progress: { _ in
+                // HUD already visible via isCapturing; nothing else needed
+            },
+            completion: { img in
+                let dt = CACurrentMediaTime() - t0
+                defer { self.isCapturing = false }
+                guard let img else {
+                    print("[UI] snapshot failed after \(String(format: "%.2f", dt))s")
+                    return
+                }
+                print("[UI] capture finished in \(String(format: "%.2f", dt))s")
+                self.handleSnapshotResult(img)
+            }
+        )
+    }
+    
+    private func handleSnapshotResult(_ img: UIImage) {
+        print("[UI] handleSnapshotResult: preparing share…")
         guard let data = img.pngData() else { print("[UI] pngData() failed"); return }
 
         let df = DateFormatter()
-        df.dateFormat = "yyyy-MM-dd_HH-mm" // safe filename
+        df.dateFormat = "yyyy-MM-dd_HH-mm"
         let fname = "MandelMetal_\(df.string(from: Date())).png"
         let url = FileManager.default.temporaryDirectory.appendingPathComponent(fname)
+
         do {
+            // Clear shareItems to avoid reusing a stale array
+            shareItems.removeAll()
             try data.write(to: url, options: .atomic)
-
-            // Prepare share payload (use a fresh array instance to ensure UI updates)
-            let items: [Any] = [url]
-            self.shareItems = items
-
-            print("[UI] wrote snapshot -> \(url.lastPathComponent)")
-
-            // Dismiss the capture sheet first (if visible), then present the Share sheet
-            // Using a slight delay avoids the blank sheet issue on first presentation.
-            if showCaptureSheet { showCaptureSheet = false }
-
-            // If a Share sheet is already presented, close it before re-presenting
-            if showShare { showShare = false }
-
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
-                self.showShare = true
+            snapshotURL = url
+            shareItems = [url]
+            // Present share sheet reliably (dismiss then present to avoid a stale controller)
+            showShare = false
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+                showShare = true
             }
         } catch {
             print("[UI] failed to write snapshot: \(error)")
         }
+    }
+
+    // Helper to open the capture sheet, prefilling custom size with current canvas pixels
+    private func openCaptureSheet() {
+        // Prefill the capture dialog with the current canvas pixel size
+        if let ds = vm.mtkView?.drawableSize, ds.width > 0, ds.height > 0 {
+            customW = String(Int(ds.width.rounded(.toNearestOrAwayFromZero)))
+            customH = String(Int(ds.height.rounded(.toNearestOrAwayFromZero)))
+            snapRes = .canvas   // <- was .custom
+        }
+        showCaptureSheet = true
     }
 
     private func appCopyright() -> String {
@@ -1385,6 +1492,7 @@ struct ContentView: View {
     }
     
     private func clamp(_ v: Double, _ a: Double, _ b: Double) -> Double { max(a, min(b, v)) }
+    
 }
 
 // MARK: - High-Contrast Toggle Style
@@ -1633,6 +1741,7 @@ private struct ResolutionSelector: View {
 
     var body: some View {
         Picker("Resolution", selection: $selection) {
+            Text("Canvas").tag(ContentView.SnapshotRes.canvas)
             Text("4K").tag(ContentView.SnapshotRes.r4k)
             Text("6K").tag(ContentView.SnapshotRes.r6k)
             Text("8K").tag(ContentView.SnapshotRes.r8k)
@@ -1761,11 +1870,20 @@ private struct CaptureSheet: View {
                 }
                 Section {
                     Button {
-                        onConfirm()
+                        // Dismiss first to avoid presenting while a sheet is up
                         onClose()
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
+                            onConfirm()
+                        }
                     } label: {
-                        Label("Capture", systemImage: "camera")
-                            .frame(maxWidth: .infinity)
+                        HStack(spacing: 8) {
+                            Spacer(minLength: 0)
+                            Image(systemName: "camera")
+                            Text("Capture")
+                                .fontWeight(.semibold)
+                            Spacer(minLength: 0)
+                        }
+                        .frame(maxWidth: .infinity)
                     }
                     .buttonStyle(.borderedProminent)
                 }
@@ -1777,9 +1895,10 @@ private struct CaptureSheet: View {
 
     private var resolutionLabel: String {
         switch snapRes {
-        case .r4k: return "3840 × 2160"
-        case .r6k: return "5760 × 3240"
-        case .r8k: return "7680 × 4320"
+        case .canvas: return "\(customW) × \(customH)"
+        case .r4k:    return "3840 × 2160"
+        case .r6k:    return "5760 × 3240"
+        case .r8k:    return "7680 × 4320"
         case .custom: return ""
         }
     }

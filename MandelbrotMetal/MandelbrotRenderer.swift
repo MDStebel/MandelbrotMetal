@@ -589,4 +589,164 @@ final class MandelbrotRenderer: NSObject, MTKViewDelegate {
         }
         self.paletteTexture = tex
     }
+    
+    // MARK: - Async Tiled Capture (non-blocking, progress + completion)
+    func captureAsyncTiled(width: Int,
+                           height: Int,
+                           tile: Int = 256,
+                           center: SIMD2<Double>,
+                           scalePixelsPerUnit: Double,
+                           iterations: Int,
+                           progress: @escaping (Double) -> Void,
+                           completion: @escaping (UIImage?) -> Void) {
+        let W = max(1, width)
+        let H = max(1, height)
+        let tileSize = max(64, tile)
+
+        // Prepare full BGRA buffer
+        let bpp = 4
+        let rowBytes = W * bpp
+        let totalBytes = rowBytes * H
+        var full = Data(count: totalBytes)
+
+        // Snapshot uniforms (do not mutate live uniforms)
+        var u = self.uniforms
+        u.maxIt = Int32(max(1, iterations))
+        u.pixelStep = 1
+        u.deepMode = 1 // high precision
+        let invScale = 1.0 / max(1e-12, scalePixelsPerUnit)
+        let originXFull = center.x - 0.5 * Double(W) * invScale
+        let originYFull = center.y - 0.5 * Double(H) * invScale
+
+        @inline(__always)
+        func split(_ d: Double) -> (Float, Float) {
+            let hi = Float(d)
+            let lo = Float(d - Double(hi))
+            return (hi, lo)
+        }
+
+        // Build tile list
+        var tiles: [(x: Int, y: Int, w: Int, h: Int)] = []
+        var y0 = 0
+        while y0 < H {
+            let th = min(tileSize, H - y0)
+            var x0 = 0
+            while x0 < W {
+                let tw = min(tileSize, W - x0)
+                tiles.append((x: x0, y: y0, w: tw, h: th))
+                x0 += tw
+            }
+            y0 += th
+        }
+        guard !tiles.isEmpty else {
+            DispatchQueue.main.async { completion(nil) }
+            return
+        }
+
+        let totalTiles = tiles.count
+        let renderQueue = DispatchQueue(label: "mandel.capture.queue", qos: .userInitiated)
+
+        func finishImage() {
+            let cs = CGColorSpaceCreateDeviceRGB()
+            guard let provider = CGDataProvider(data: full as CFData) else {
+                DispatchQueue.main.async { completion(nil) }
+                return
+            }
+            guard let cg = CGImage(width: W, height: H,
+                                   bitsPerComponent: 8, bitsPerPixel: 32,
+                                   bytesPerRow: rowBytes, space: cs,
+                                   bitmapInfo: CGBitmapInfo.byteOrder32Little.union(
+                                       CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedFirst.rawValue)
+                                   ),
+                                   provider: provider, decode: nil,
+                                   shouldInterpolate: false, intent: .defaultIntent) else {
+                DispatchQueue.main.async { completion(nil) }
+                return
+            }
+            DispatchQueue.main.async { completion(UIImage(cgImage: cg)) }
+        }
+
+        func renderTile(at index: Int) {
+            if index >= totalTiles {
+                finishImage()
+                return
+            }
+            let t = tiles[index]
+            renderQueue.async {
+                autoreleasepool {
+                    // Shared texture so we can getBytes() after GPU finishes
+                    let desc = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .bgra8Unorm,
+                                                                        width: t.w, height: t.h, mipmapped: false)
+                    desc.usage = [.shaderWrite, .shaderRead]
+                    desc.storageMode = .shared
+                    guard let tex = self.device.makeTexture(descriptor: desc),
+                          let cmd = self.queue.makeCommandBuffer() else {
+                        DispatchQueue.main.async { completion(nil) }
+                        return
+                    }
+
+                    // Tile uniforms
+                    let tOriginX = originXFull + Double(t.x) * invScale
+                    let tOriginY = originYFull + Double(t.y) * invScale
+                    u.origin = SIMD2<Float>(Float(tOriginX), Float(tOriginY))
+                    u.step   = SIMD2<Float>(Float(invScale), Float(invScale))
+                    u.size   = SIMD2<UInt32>(UInt32(t.w), UInt32(t.h))
+
+                    let (oRx, oRxLo) = split(tOriginX)
+                    let (oRy, oRyLo) = split(tOriginY)
+                    let (sX,  sXLo)  = split(invScale)
+                    let (sY,  sYLo)  = split(invScale)
+                    u.originHi = SIMD2<Float>(oRx, oRy)
+                    u.originLo = SIMD2<Float>(oRxLo, oRyLo)
+                    u.stepHi   = SIMD2<Float>(sX, sY)
+                    u.stepLo   = SIMD2<Float>(sXLo, sYLo)
+
+                    if let enc = cmd.makeComputeCommandEncoder() {
+                        enc.setComputePipelineState(self.pipeline)
+
+                        // Fallback: if palette == LUT (3) but no LUT bound, use HSV instead to avoid white output.
+                        var uLocal = u
+                        if uLocal.palette == 3 && self.paletteTexture == nil {
+                            uLocal.palette = 0 // HSV
+                        }
+
+                        enc.setBytes(&uLocal, length: MemoryLayout<MandelbrotUniforms>.stride, index: 0)
+                        enc.setTexture(tex, index: 0)
+                        // Bind LUT only if actually used; otherwise a dummy is harmless, but not required.
+                        enc.setTexture(self.paletteTexture ?? self.ensureDummyPaletteTexture(), index: 1)
+
+                        let wth = self.pipeline.threadExecutionWidth
+                        let hth = max(1, self.pipeline.maxTotalThreadsPerThreadgroup / wth)
+                        let tg = MTLSize(width: wth, height: hth, depth: 1)
+                        let groups = MTLSize(
+                            width:  (t.w + tg.width  - 1) / tg.width,
+                            height: (t.h + tg.height - 1) / tg.height,
+                            depth:  1
+                        )
+                        enc.dispatchThreadgroups(groups, threadsPerThreadgroup: tg)
+                        enc.endEncoding()
+                    }
+
+                    cmd.addCompletedHandler { _ in
+                        // Copy tile into big buffer
+                        full.withUnsafeMutableBytes { p in
+                            guard let base = p.baseAddress else { return }
+                            let region = MTLRegionMake2D(0, 0, t.w, t.h)
+                            tex.getBytes(base.advanced(by: t.y * rowBytes + t.x * bpp),
+                                         bytesPerRow: rowBytes,
+                                         from: region, mipmapLevel: 0)
+                        }
+                        let pct = Double(index + 1) / Double(totalTiles)
+                        DispatchQueue.main.async { progress(pct) }
+                        renderTile(at: index + 1)
+                    }
+
+                    cmd.commit()
+                }
+            }
+        }
+
+        DispatchQueue.main.async { progress(0.0) }
+        renderTile(at: 0)
+    }
 }
