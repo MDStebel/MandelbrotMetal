@@ -78,12 +78,17 @@ struct AnimatedLaunchView: View {
     let backgroundName: String
     let logoName: String
 
+    @Environment(\.colorScheme) private var scheme
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.horizontalSizeClass) private var hSize
     @Environment(\.verticalSizeClass) private var vSize
 
     @State private var glow = 0.0
     @State private var scale: CGFloat = 1.0
     @State private var logoOpacity: Double = 0.0
+
+    @State private var bgOpacity: Double = 1.0
+    private var isPad: Bool { hSize == .regular && vSize == .regular }
 
     private var tuning: (maxWidth: CGFloat, baseScale: CGFloat, pulse: CGFloat, glowRadius: CGFloat) {
         // Compact-width iPhones get a smaller logo and slightly stronger pulse
@@ -104,22 +109,30 @@ struct AnimatedLaunchView: View {
                 .resizable()
                 .scaledToFill()
                 .ignoresSafeArea()
+                .opacity(bgOpacity)
 
             Image(logoName)
                 .resizable()
                 .scaledToFit()
                 .frame(maxWidth: tuning.maxWidth)
-                .shadow(color: .cyan.opacity(0.25 + 0.35 * glow),
-                        radius: tuning.glowRadius + 10 * glow, x: 0, y: 0)
+                .shadow(
+                    color: .cyan.opacity((scheme == .dark ? 0.28 : 0.18) + 0.35 * glow),
+                    radius: tuning.glowRadius + (isPad ? 6 : 10) * glow, x: 0, y: 0
+                )
                 .scaleEffect(tuning.baseScale + CGFloat(glow) * tuning.pulse)
                 .opacity(logoOpacity)
                 .padding()
         }
         .onAppear {
             withAnimation(.easeOut(duration: 0.35)) { logoOpacity = 1.0 }
-            withAnimation(.easeInOut(duration: 1.0).repeatForever(autoreverses: true)) {
-                glow = 1.0
+            if reduceMotion {
+                glow = 0.0
+            } else {
+                withAnimation(.easeInOut(duration: 1.0).repeatForever(autoreverses: true)) {
+                    glow = 1.0
+                }
             }
+            withAnimation(.easeInOut(duration: 0.35).delay(0.65)) { bgOpacity = 0.0 }
         }
     }
 }

@@ -1093,7 +1093,7 @@ struct ContentView: View {
     private var hud: some View {
         let compact = (hSize == .compact)
         return VStack(alignment: .leading, spacing: compact ? 4 : 6) {
-            Text("Mandelbrot (Metal)")
+            Text("Mandelbrot Metal")
                 .font(compact ? Font.subheadline : Font.headline)
                 .monospaced()
                 .legibleText()
