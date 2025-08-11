@@ -143,7 +143,6 @@ struct ContentView: View {
     @StateObject private var vm = FractalVM()
     @State private var pendingCenter = SIMD2<Double>(0, 0)
     @State private var pendingScale  = 1.0
-    @State private var perturbation = false
     @State private var palette = 0 // 0=HSV, 1=Fire, 2=Ocean
     @State private var gradientItem: PhotosPickerItem? = nil
     @State private var showPalettePicker = false
@@ -204,13 +203,12 @@ struct ContentView: View {
             }
             .onAppear {
                 if let s = vm.loadState() {
-                    perturbation = s.perturb
+                    // Ignore legacy perturbation flag from saved state
                     deepZoom = s.deep
-                    palette = s.palette
+                    palette  = s.palette
                 }
                 vm.pushViewport(currentPointsSize(geo.size), screenScale: currentScreenScale())
                 vm.requestDraw()
-                vm.renderer?.setPerturbation(perturbation)
                 vm.renderer?.setPalette(palette)
                 vm.renderer?.setDeepZoom(deepZoom)
                 currentPaletteName = (palette == 0 ? "HSV" : palette == 1 ? "Fire" : palette == 2 ? "Ocean" : currentPaletteName)
@@ -234,12 +232,11 @@ struct ContentView: View {
             .onChange(of: geo.size) { _, newSize in
                 vm.pushViewport(currentPointsSize(newSize), screenScale: currentScreenScale())
             }
-            .onChange(of: perturbation) { vm.saveState(perturb: perturbation, deep: deepZoom, palette: palette) }
-            .onChange(of: deepZoom)     { vm.saveState(perturb: perturbation, deep: deepZoom, palette: palette) }
-            .onChange(of: palette)      { vm.saveState(perturb: perturbation, deep: deepZoom, palette: palette) }
-            .onChange(of: vm.center)    { vm.saveState(perturb: perturbation, deep: deepZoom, palette: palette) }
-            .onChange(of: vm.scalePixelsPerUnit) { vm.saveState(perturb: perturbation, deep: deepZoom, palette: palette) }
-            .onChange(of: vm.maxIterations)      { vm.saveState(perturb: perturbation, deep: deepZoom, palette: palette) }
+            .onChange(of: deepZoom)     { vm.saveState(perturb: false, deep: deepZoom, palette: palette) }
+            .onChange(of: palette)      { vm.saveState(perturb: false, deep: deepZoom, palette: palette) }
+            .onChange(of: vm.center)    { vm.saveState(perturb: false, deep: deepZoom, palette: palette) }
+            .onChange(of: vm.scalePixelsPerUnit) { vm.saveState(perturb: false, deep: deepZoom, palette: palette) }
+            .onChange(of: vm.maxIterations)      { vm.saveState(perturb: false, deep: deepZoom, palette: palette) }
             .toolbar { }
             .sheet(isPresented: $showPalettePicker) {
                 NavigationStack {
@@ -311,7 +308,7 @@ struct ContentView: View {
                                                   scale: vm.scalePixelsPerUnit,
                                                   palette: palette,
                                                   deep: deepZoom,
-                                                  perturb: perturbation)
+                                                  perturb: false)
                                 bookmarks.append(bm)
                                 saveBookmarks()
                                 showAddBookmark = false
@@ -326,7 +323,6 @@ struct ContentView: View {
                     showPalettePicker: $showPalettePicker,
                     autoIterations: $autoIterations,
                     iterations: $vm.maxIterations,
-                    perturbation: $perturbation,
                     deepZoom: $deepZoom,
                     snapRes: $snapRes,
                     paletteOptions: paletteOptions,
@@ -367,9 +363,6 @@ struct ContentView: View {
 
     @ViewBuilder
     private func fractalCanvas(_ geo: GeometryProxy) -> some View {
-        let singleTap = SpatialTapGesture(count: 1).onEnded { value in
-            recenterAtTap(value.location, size: geo.size)
-        }
         let doubleTap = SpatialTapGesture(count: 2).onEnded { value in
             doubleTapZoom(point: value.location, size: geo.size, factor: 2.0)
         }
@@ -377,15 +370,8 @@ struct ContentView: View {
         MetalFractalView(vm: vm)
             .ignoresSafeArea()
             .contentShape(Rectangle())
-            .gesture(panAndZoom(geo.size))                       // pan + pinch
-            .highPriorityGesture(doubleTap)                      // ensure double‑tap wins
-            .simultaneousGesture(singleTap)                      // single‑tap recenter
-            .simultaneousGesture(
-                LongPressGesture(minimumDuration: 0.5).onEnded { _ in
-                    vm.renderer?.recenterReference(atComplex: vm.center, iterations: vm.maxIterations)
-                    vm.requestDraw()
-                }
-            )
+            .gesture(panAndZoom(geo.size))     // pan + pinch
+            .highPriorityGesture(doubleTap)    // ×2 zoom at tap point
     }
 
     // Helper to provide compact/regular palette labels with accessibility support
@@ -938,7 +924,7 @@ struct ContentView: View {
             VStack(spacing: 10) {
                 let narrow = geo.size.width < 980
                 // Row 1 — Navigation • Modes • Iterations
-                HStack(alignment: .firstTextBaseline, spacing: narrow ? 12 : 18) {
+                HStack(alignment: .center, spacing: narrow ? 12 : 18) {
                     // Navigation
                     Button(action: { reset(geo.size) }) {
                         Label("Reset", systemImage: "arrow.counterclockwise")
@@ -948,10 +934,6 @@ struct ContentView: View {
 
                     // Modes (aligned labeled toggles)
                     HStack(spacing: 16) {
-                        LabeledToggle(title: "Perturb",  systemImage: "bolt.circle", isOn: $perturbation)
-                            .onChange(of: perturbation) { _, v in
-                                vm.renderer?.setPerturbation(v); vm.requestDraw()
-                            }
                         LabeledToggle(title: "Deep Zoom", systemImage: "scope", isOn: $deepZoom)
                             .onChange(of: deepZoom) { _, v in
                                 vm.renderer?.setDeepZoom(v); vm.requestDraw()
@@ -967,8 +949,27 @@ struct ContentView: View {
                             .lineLimit(1)
                             .minimumScaleFactor(0.9)
 
-                        Slider(value: iterBinding, in: 100...12000, step: 100)
-                            .frame(width: min(max(geo.size.width * 0.25, 200), 360))
+                        Button(action: {
+                            let newVal = max(100, vm.maxIterations - 50)
+                            vm.maxIterations = newVal
+                            vm.renderer?.setMaxIterations(newVal)
+                            vm.requestDraw()
+                        }) { Image(systemName: "minus") }
+                        .buttonStyle(.borderless)
+                        .controlSize(.small)
+
+                        Slider(value: iterBinding, in: 100...5000, step: 50)
+                            .controlSize(.small)
+                            .frame(width: min(max(geo.size.width * 0.18, 160), 260))
+
+                        Button(action: {
+                            let newVal = min(5000, vm.maxIterations + 50)
+                            vm.maxIterations = newVal
+                            vm.renderer?.setMaxIterations(newVal)
+                            vm.requestDraw()
+                        }) { Image(systemName: "plus") }
+                        .buttonStyle(.borderless)
+                        .controlSize(.small)
 
                         Text(autoIterations ? "\(effectiveIterations) (auto)" : "\(vm.maxIterations)")
                             .font(.caption)
@@ -977,7 +978,7 @@ struct ContentView: View {
                             .lineLimit(1)
                             .minimumScaleFactor(0.8)
                     }
-                    .alignmentGuide(.firstTextBaseline) { d in d[.bottom] }
+                    .frame(height: 28)
 
                     Spacer(minLength: 8)
                 }
@@ -1065,8 +1066,9 @@ struct ContentView: View {
         Binding<Double>(
             get: { Double(vm.maxIterations) },
             set: { newVal in
-                vm.maxIterations = Int(newVal.rounded())
-                vm.renderer?.setMaxIterations(vm.maxIterations)
+                let clamped = min(5000, max(100, Int(newVal.rounded())))
+                vm.maxIterations = clamped
+                vm.renderer?.setMaxIterations(clamped)
                 vm.requestDraw()
             }
         )
@@ -1137,6 +1139,7 @@ struct ContentView: View {
     private func applyPinch(_ value: CGFloat, size: CGSize) {
         let factor = Double(value)
         vm.scalePixelsPerUnit *= factor
+        autoEnableDeepZoomIfNeeded(vm.scalePixelsPerUnit)
         pendingScale = 1.0
         vm.pushViewport(currentPointsSize(size), screenScale: currentScreenScale())
         if autoIterations {
@@ -1152,6 +1155,7 @@ struct ContentView: View {
         if autoIterations {
             vm.renderer?.setMaxIterations(autoIterationsForScale(vm.scalePixelsPerUnit))
         }
+        autoEnableDeepZoomIfNeeded(vm.scalePixelsPerUnit)
         vm.requestDraw()
     }
     
@@ -1180,12 +1184,22 @@ struct ContentView: View {
         return capped
     }
     
+    private let deepZoomThreshold: Double = 1e8 // 100,000,000×
+
+    private func autoEnableDeepZoomIfNeeded(_ scale: Double) {
+        if scale >= deepZoomThreshold && !deepZoom {
+            deepZoom = true
+            vm.renderer?.setDeepZoom(true)
+        }
+    }
+    
     private func liveUpdate(size: CGSize) {
         var center = vm.center + pendingCenter
         var scale = vm.scalePixelsPerUnit * pendingScale
         scale = max(0.01, min(scale, 1e12))
         center.x = clamp(center.x, -3.0, 3.0)
         center.y = clamp(center.y, -3.0, 3.0)
+        autoEnableDeepZoomIfNeeded(scale)
         
         let it = autoIterations ? autoIterationsForScale(scale) : vm.maxIterations
         vm.renderer?.setViewport(center: center,
@@ -1222,32 +1236,14 @@ struct ContentView: View {
         vm.requestDraw()
     }
 
-    private func recenterAtTap(_ point: CGPoint, size: CGSize) {
-        let ds = vm.mtkView?.drawableSize
-        let pxW = ds?.width ?? floor(size.width * currentScreenScale())
-        let pxH = ds?.height ?? floor(size.height * currentScreenScale())
-        let s = Double(pxW / size.width)
-        let pixelW = Double(pxW)
-        let pixelH = Double(pxH)
-        let invScale = 1.0 / vm.scalePixelsPerUnit
-        let halfW = 0.5 * pixelW
-        let halfH = 0.5 * pixelH
-        let cx = (Double(point.x) * s - halfW) * invScale + vm.center.x
-        let cy = (Double(point.y) * s - halfH) * invScale + vm.center.y
-        vm.renderer?.recenterReference(atComplex: SIMD2<Double>(cx, cy), iterations: vm.maxIterations)
-        vm.requestDraw()
-    }
-
     private func applyBookmark(_ bm: Bookmark, size: CGSize) {
         vm.center = bm.center
         vm.scalePixelsPerUnit = bm.scale
         palette = bm.palette
         deepZoom = bm.deep
-        perturbation = bm.perturb
         vm.pushViewport(currentPointsSize(size), screenScale: currentScreenScale())
         vm.renderer?.setPalette(palette)
         vm.renderer?.setDeepZoom(deepZoom)
-        vm.renderer?.setPerturbation(perturbation)
         currentPaletteName = (palette == 0 ? "HSV" : palette == 1 ? "Fire" : palette == 2 ? "Ocean" : currentPaletteName)
         vm.requestDraw()
     }
@@ -1351,14 +1347,23 @@ struct ContentView: View {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent(fname)
         do {
             try data.write(to: url, options: .atomic)
-            snapshotURL = url
-            snapshotImage = nil
-            shareItems = [url]
 
-            // present share sheet; user can choose “Save Image” if they want Photos
-            DispatchQueue.main.async { showShare = true }
+            // Prepare share payload (use a fresh array instance to ensure UI updates)
+            let items: [Any] = [url]
+            self.shareItems = items
 
             print("[UI] wrote snapshot -> \(url.lastPathComponent)")
+
+            // Dismiss the capture sheet first (if visible), then present the Share sheet
+            // Using a slight delay avoids the blank sheet issue on first presentation.
+            if showCaptureSheet { showCaptureSheet = false }
+
+            // If a Share sheet is already presented, close it before re-presenting
+            if showShare { showShare = false }
+
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+                self.showShare = true
+            }
         } catch {
             print("[UI] failed to write snapshot: \(error)")
         }
@@ -1369,7 +1374,7 @@ struct ContentView: View {
             return s
         }
         let year = Calendar.current.component(.year, from: Date())
-        return "© \(year) Michael Stebel. All rights reserved."
+        return "© \(year) Michael Stebel Consulting, LLC. All rights reserved."
     }
 
     private func appVersionBuild() -> String {
@@ -1456,7 +1461,7 @@ private struct HelpView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: compact ? 14 : 18) {
                 sectionHeader("Getting Started")
-                Text("Pinch to zoom, drag to pan. Double‑tap to zoom in at the tap point. Long‑press to rebuild the **perturbation reference** at the current center.")
+                Text("Pinch to zoom, drag to pan. Double-tap to zoom in at the tap point. Deep Zoom engages automatically at extreme magnifications to reduce precision artifacts.")
                     .fixedSize(horizontal: false, vertical: true)
                     .foregroundStyle(.primary)
 
@@ -1464,11 +1469,9 @@ private struct HelpView: View {
                 bullet("Magnify", "pinch")
                 bullet("Pan", "hand.draw")
                 bullet("Zoom at point (×2)", "touchid")
-                bullet("Recenter perturbation", "hand.point.up.left.fill", suffix: "Long‑press")
-                bullet("Tap‑to‑recenter perturbation", "cursorarrow.rays", suffix: "Single tap anywhere")
 
                 sectionHeader("Rendering Modes")
-                Text("**Perturbation** stabilizes ultra‑deep zooms by computing differences from a nearby reference orbit. **Deep Zoom** switches the kernel into double‑single math for more precision.")
+                Text("**Deep Zoom** switches the kernel into higher‑precision math (double‑single) for extreme magnifications to mitigate precision artifacts.")
                     .foregroundStyle(.primary)
 
                 sectionHeader("Color & Palettes")
@@ -1489,13 +1492,12 @@ private struct HelpView: View {
 
                 sectionHeader("Performance Tips")
                 bullet("Start simple", "speedometer", suffix: "Explore with moderate iterations; export high‑res later.")
-                bullet("Use perturbation for deep zooms", "bolt.fill")
                 bullet("Prefer 6K over 8K on older devices", "rectangle.on.rectangle")
 
                 sectionHeader("Troubleshooting")
                 bullet("Black screen", "exclamationmark.triangle", suffix: "Ensure iterations aren’t extremely high; try Reset.")
                 bullet("Stale color after import", "paintpalette", suffix: "After importing a gradient, ensure the LUT option is active if available.")
-                bullet("Blur at extreme zoom", "scope", suffix: "Enable Deep Zoom and tap/long‑press to recenter perturbation.")
+                bullet("Blur at extreme zoom", "scope", suffix: "Enable Deep Zoom.")
 
                 Divider().padding(.vertical, 4)
                 Text(appMeta())
@@ -1654,7 +1656,6 @@ private struct CompactOptionsSheet: View {
     @Binding var showPalettePicker: Bool
     @Binding var autoIterations: Bool
     @Binding var iterations: Int
-    @Binding var perturbation: Bool
     @Binding var deepZoom: Bool
     @Binding var snapRes: ContentView.SnapshotRes
     
@@ -1674,13 +1675,6 @@ private struct CompactOptionsSheet: View {
             List {
                 Section {
                     HStack {
-                        Label("Perturbation", systemImage: "bolt.circle")
-                        Spacer()
-                        Toggle("", isOn: $perturbation)
-                            .labelsHidden()
-                            .toggleStyle(AccessibleSwitchToggleStyle())
-                    }
-                    HStack {
                         Label("Deep Zoom", systemImage: "scope")
                         Spacer()
                         Toggle("", isOn: $deepZoom)
@@ -1692,7 +1686,7 @@ private struct CompactOptionsSheet: View {
                 }
 
                 Section {
-                    Stepper(value: $iterations, in: 100...12000, step: 100) {
+                    Stepper(value: $iterations, in: 100...5000, step: 50) {
                         Text(autoIterations ? "Iterations: \(iterations) (auto)" : "Iterations: \(iterations)")
                     }
                     HStack {
