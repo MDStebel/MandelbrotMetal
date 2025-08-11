@@ -27,6 +27,8 @@ struct MandelbrotUniforms {
     var originLo: SIMD2<Float>
     var stepHi: SIMD2<Float>
     var stepLo: SIMD2<Float>
+    var perturbation: Int32
+    var c0: SIMD2<Float>
 }
 
 final class MandelbrotRenderer: NSObject, MTKViewDelegate {
@@ -51,11 +53,13 @@ final class MandelbrotRenderer: NSObject, MTKViewDelegate {
         size: .zero,
         pixelStep: 1,
         palette: 0,
-        deepMode: 0,
+        deepMode: 1,
         originHi: .zero,
         originLo: .zero,
         stepHi: .zero,
-        stepLo: .zero
+        stepLo: .zero,
+        perturbation: 0,
+        c0: .zero         
     )
 
     // Enable deep precision sooner to reduce blockiness
@@ -122,6 +126,7 @@ final class MandelbrotRenderer: NSObject, MTKViewDelegate {
                 return nil
             }
             self.pipeline = try device.makeComputePipelineState(function: fn)
+            self.uniforms.deepMode = 1
             print("MandelbrotRenderer.init: pipeline created")
         } catch {
             print("MandelbrotRenderer.init: **FAILED** to build library/pipeline: \(error)")
@@ -625,19 +630,60 @@ final class MandelbrotRenderer: NSObject, MTKViewDelegate {
             return (hi, lo)
         }
 
-        // Build tile list
+        // Build tile list (center-out order for better perceived progress)
         var tiles: [(x: Int, y: Int, w: Int, h: Int)] = []
-        var y0 = 0
-        while y0 < H {
+        let cols = (W + tileSize - 1) / tileSize
+        let rows = (H + tileSize - 1) / tileSize
+        let cx = cols / 2
+        let cy = rows / 2
+
+        func tileRect(_ i: Int, _ j: Int) -> (x: Int, y: Int, w: Int, h: Int) {
+            let x0 = i * tileSize
+            let y0 = j * tileSize
+            let tw = min(tileSize, W - x0)
             let th = min(tileSize, H - y0)
-            var x0 = 0
-            while x0 < W {
-                let tw = min(tileSize, W - x0)
-                tiles.append((x: x0, y: y0, w: tw, h: th))
-                x0 += tw
-            }
-            y0 += th
+            return (x: x0, y: y0, w: tw, h: th)
         }
+
+        var ring = 0
+        tiles.reserveCapacity(cols * rows)
+        while tiles.count < cols * rows {
+            let iMin = max(0, cx - ring)
+            let iMax = min(cols - 1, cx + ring)
+            let jMin = max(0, cy - ring)
+            let jMax = min(rows - 1, cy + ring)
+
+            // top row (left -> right)
+            if jMin < rows {
+                for i in iMin...iMax {
+                    let t = tileRect(i, jMin)
+                    if t.w > 0 && t.h > 0 { tiles.append(t) }
+                }
+            }
+            // right column (top+1 -> bottom)
+            if iMax < cols && jMin + 1 <= jMax {
+                for j in (jMin + 1)...jMax {
+                    let t = tileRect(iMax, j)
+                    if t.w > 0 && t.h > 0 { tiles.append(t) }
+                }
+            }
+            // bottom row (right -> left)
+            if jMax < rows && jMax != jMin {
+                for i in stride(from: iMax, through: iMin, by: -1) {
+                    let t = tileRect(i, jMax)
+                    if t.w > 0 && t.h > 0 { tiles.append(t) }
+                }
+            }
+            // left column (bottom-1 -> top+1)
+            if iMin < cols && iMax != iMin && jMax - 1 >= jMin + 1 {
+                for j in stride(from: jMax - 1, through: jMin + 1, by: -1) {
+                    let t = tileRect(iMin, j)
+                    if t.w > 0 && t.h > 0 { tiles.append(t) }
+                }
+            }
+            ring += 1
+        }
+        if tiles.count > cols * rows { tiles.removeLast(tiles.count - cols * rows) }
         guard !tiles.isEmpty else {
             DispatchQueue.main.async { completion(nil) }
             return
