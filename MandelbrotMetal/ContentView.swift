@@ -107,9 +107,25 @@ struct MetalFractalView: UIViewRepresentable {
         view.enableSetNeedsDisplay = false // continuous redraw
         view.preferredFramesPerSecond = 60
         view.autoResizeDrawable = false
+
         guard let renderer = MandelbrotRenderer(mtkView: view) else { return view }
         vm.attachRenderer(renderer)
         vm.attachView(view)
+
+        // Ensure an initial draw happens even before the first interaction
+        DispatchQueue.main.async { [weak vm] in
+            guard let vm else { return }
+            let nominalScale = view.window?.screen.scale ?? UIScreen.main.scale
+            let sizePts = view.bounds.size
+            let sizePx = CGSize(
+                width: floor(max(1, sizePts.width  * nominalScale)),
+                height: floor(max(1, sizePts.height * nominalScale))
+            )
+            view.drawableSize = sizePx
+            vm.pushViewport(sizePts, screenScale: nominalScale)
+            vm.requestDraw()
+        }
+
         return view
     }
     
@@ -1466,7 +1482,7 @@ private struct HelpView: View {
                     .foregroundStyle(.primary)
 
                 sectionHeader("Navigation & Gestures")
-                bullet("Magnify", "pinch")
+                bullet("Magnify — pinch to zoom in/out", "magnifyingglass")
                 bullet("Pan", "hand.draw")
                 bullet("Zoom at point (×2)", "touchid")
 
