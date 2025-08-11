@@ -163,8 +163,6 @@ struct ContentView: View {
     @State private var gradientItem: PhotosPickerItem? = nil
     @State private var showPalettePicker = false
     @State private var currentPaletteName: String = "HSV" // tracks UI label for palette
-    
-    @State private var deepZoom = false
     @State private var snapshotImage: UIImage? = nil
     @State private var showShare = false
     @State private var shareItems: [Any] = []
@@ -219,14 +217,13 @@ struct ContentView: View {
             }
             .onAppear {
                 if let s = vm.loadState() {
-                    // Ignore legacy perturbation flag from saved state
-                    deepZoom = s.deep
-                    palette  = s.palette
+                    // Deep Zoom is always on now; ignore saved flag
+                    palette = s.palette
                 }
                 vm.pushViewport(currentPointsSize(geo.size), screenScale: currentScreenScale())
                 vm.requestDraw()
                 vm.renderer?.setPalette(palette)
-                vm.renderer?.setDeepZoom(deepZoom)
+                vm.renderer?.setDeepZoom(true)
                 currentPaletteName = (palette == 0 ? "HSV" : palette == 1 ? "Fire" : palette == 2 ? "Ocean" : currentPaletteName)
                 loadBookmarks()
                 // Listen for renderer fallbacks (perturbation/LUT resource issues)
@@ -248,11 +245,10 @@ struct ContentView: View {
             .onChange(of: geo.size) { _, newSize in
                 vm.pushViewport(currentPointsSize(newSize), screenScale: currentScreenScale())
             }
-            .onChange(of: deepZoom)     { vm.saveState(perturb: false, deep: deepZoom, palette: palette) }
-            .onChange(of: palette)      { vm.saveState(perturb: false, deep: deepZoom, palette: palette) }
-            .onChange(of: vm.center)    { vm.saveState(perturb: false, deep: deepZoom, palette: palette) }
-            .onChange(of: vm.scalePixelsPerUnit) { vm.saveState(perturb: false, deep: deepZoom, palette: palette) }
-            .onChange(of: vm.maxIterations)      { vm.saveState(perturb: false, deep: deepZoom, palette: palette) }
+            .onChange(of: palette)                 { vm.saveState(perturb: false, deep: true, palette: palette) }
+            .onChange(of: vm.center)               { vm.saveState(perturb: false, deep: true, palette: palette) }
+            .onChange(of: vm.scalePixelsPerUnit)   { vm.saveState(perturb: false, deep: true, palette: palette) }
+            .onChange(of: vm.maxIterations)        { vm.saveState(perturb: false, deep: true, palette: palette) }
             .toolbar { }
             .sheet(isPresented: $showPalettePicker) {
                 NavigationStack {
@@ -323,7 +319,7 @@ struct ContentView: View {
                                                   center: vm.center,
                                                   scale: vm.scalePixelsPerUnit,
                                                   palette: palette,
-                                                  deep: deepZoom,
+                                                  deep: true,
                                                   perturb: false)
                                 bookmarks.append(bm)
                                 saveBookmarks()
@@ -339,7 +335,6 @@ struct ContentView: View {
                     showPalettePicker: $showPalettePicker,
                     autoIterations: $autoIterations,
                     iterations: $vm.maxIterations,
-                    deepZoom: $deepZoom,
                     snapRes: $snapRes,
                     paletteOptions: paletteOptions,
                     applyPalette: { opt in
@@ -948,12 +943,8 @@ struct ContentView: View {
 
                     Divider().frame(height: 22).opacity(0.2)
 
-                    // Modes (aligned labeled toggles)
+                    // Modes (Auto Iter only; Deep Zoom always on)
                     HStack(spacing: 16) {
-                        LabeledToggle(title: "Deep Zoom", systemImage: "scope", isOn: $deepZoom)
-                            .onChange(of: deepZoom) { _, v in
-                                vm.renderer?.setDeepZoom(v); vm.requestDraw()
-                            }
                         LabeledToggle(title: "Auto Iter", systemImage: "aqi.medium", isOn: $autoIterations)
                     }
 
@@ -1155,7 +1146,6 @@ struct ContentView: View {
     private func applyPinch(_ value: CGFloat, size: CGSize) {
         let factor = Double(value)
         vm.scalePixelsPerUnit *= factor
-        autoEnableDeepZoomIfNeeded(vm.scalePixelsPerUnit)
         pendingScale = 1.0
         vm.pushViewport(currentPointsSize(size), screenScale: currentScreenScale())
         if autoIterations {
@@ -1171,7 +1161,6 @@ struct ContentView: View {
         if autoIterations {
             vm.renderer?.setMaxIterations(autoIterationsForScale(vm.scalePixelsPerUnit))
         }
-        autoEnableDeepZoomIfNeeded(vm.scalePixelsPerUnit)
         vm.requestDraw()
     }
     
@@ -1200,22 +1189,12 @@ struct ContentView: View {
         return capped
     }
     
-    private let deepZoomThreshold: Double = 1e8 // 100,000,000×
-
-    private func autoEnableDeepZoomIfNeeded(_ scale: Double) {
-        if scale >= deepZoomThreshold && !deepZoom {
-            deepZoom = true
-            vm.renderer?.setDeepZoom(true)
-        }
-    }
-    
     private func liveUpdate(size: CGSize) {
         var center = vm.center + pendingCenter
         var scale = vm.scalePixelsPerUnit * pendingScale
         scale = max(0.01, min(scale, 1e12))
         center.x = clamp(center.x, -3.0, 3.0)
         center.y = clamp(center.y, -3.0, 3.0)
-        autoEnableDeepZoomIfNeeded(scale)
         
         let it = autoIterations ? autoIterationsForScale(scale) : vm.maxIterations
         vm.renderer?.setViewport(center: center,
@@ -1256,10 +1235,9 @@ struct ContentView: View {
         vm.center = bm.center
         vm.scalePixelsPerUnit = bm.scale
         palette = bm.palette
-        deepZoom = bm.deep
         vm.pushViewport(currentPointsSize(size), screenScale: currentScreenScale())
         vm.renderer?.setPalette(palette)
-        vm.renderer?.setDeepZoom(deepZoom)
+        vm.renderer?.setDeepZoom(true)
         currentPaletteName = (palette == 0 ? "HSV" : palette == 1 ? "Fire" : palette == 2 ? "Ocean" : currentPaletteName)
         vm.requestDraw()
     }
@@ -1672,7 +1650,6 @@ private struct CompactOptionsSheet: View {
     @Binding var showPalettePicker: Bool
     @Binding var autoIterations: Bool
     @Binding var iterations: Int
-    @Binding var deepZoom: Bool
     @Binding var snapRes: ContentView.SnapshotRes
     
     let paletteOptions: [ContentView.PaletteOption]
@@ -1689,18 +1666,6 @@ private struct CompactOptionsSheet: View {
     var body: some View {
         NavigationStack {
             List {
-                Section {
-                    HStack {
-                        Label("Deep Zoom", systemImage: "scope")
-                        Spacer()
-                        Toggle("", isOn: $deepZoom)
-                            .labelsHidden()
-                            .toggleStyle(AccessibleSwitchToggleStyle())
-                    }
-                } header: {
-                    Text("Modes")
-                }
-
                 Section {
                     Stepper(value: $iterations, in: 100...5000, step: 50) {
                         Text(autoIterations ? "Iterations: \(iterations) (auto)" : "Iterations: \(iterations)")

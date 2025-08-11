@@ -16,9 +16,9 @@
             <BuildableReference
                BuildableIdentifier = "primary"
                BlueprintIdentifier = "E26454312E46F7000015F51C"
-               BuildableName = "MandelbrotMetal.app"
-               BlueprintName = "MandelbrotMetal"
-               ReferencedContainer = "container:MandelbrotMetal.xcodeproj">
+               BuildableName = "Mandelbrot Metal.app"
+               BlueprintName = "Mandelbrot Metal"
+               ReferencedContainer = "container:Mandelbrot Metal.xcodeproj">
             </BuildableReference>
          </BuildActionEntry>
       </BuildActionEntries>
@@ -45,9 +45,9 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "E26454312E46F7000015F51C"
-            BuildableName = "MandelbrotMetal.app"
-            BlueprintName = "MandelbrotMetal"
-            ReferencedContainer = "container:MandelbrotMetal.xcodeproj">
+            BuildableName = "Mandelbrot Metal.app"
+            BlueprintName = "Mandelbrot Metal"
+            ReferencedContainer = "container:Mandelbrot Metal.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>
    </LaunchAction>
@@ -62,9 +62,9 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "E26454312E46F7000015F51C"
-            BuildableName = "MandelbrotMetal.app"
-            BlueprintName = "MandelbrotMetal"
-            ReferencedContainer = "container:MandelbrotMetal.xcodeproj">
+            BuildableName = "Mandelbrot Metal.app"
+            BlueprintName = "Mandelbrot Metal"
+            ReferencedContainer = "container:Mandelbrot Metal.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>
    </ProfileAction>

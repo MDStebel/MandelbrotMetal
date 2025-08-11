@@ -21,8 +21,6 @@ struct MandelbrotUniforms {
     float2 originLo; // deep zoom lo components (re, im)
     float2 stepHi;   // deep zoom step hi (dx, dy)
     float2 stepLo;   // deep zoom step lo (dx, dy)
-    int    perturbation; // 0=off, 1=on
-    float2 c0;           // reference point for perturbation (complex)
 };
 
 // ===== Math helpers =====
@@ -59,6 +57,17 @@ inline DS ds_add(DS a, DS b) {
 inline DS ds_mul_float(DS a, float b) {
     float p  = a.hi * b;
     float e  = fma(a.hi, b, -p) + a.lo * b;
+    float2 s = two_sum(p, e);
+    return ds_make(s.x, s.y);
+}
+
+inline DS ds_neg(DS a) { return ds_make(-a.hi, -a.lo); }
+inline DS ds_sub(DS a, DS b) { return ds_add(a, ds_neg(b)); }
+inline DS ds_mul(DS a, DS b) {
+    // Dekker‑style: hi*hi with error, then mix in cross terms
+    float p = a.hi * b.hi;
+    float e = fma(a.hi, b.hi, -p);
+    e += a.hi * b.lo + a.lo * b.hi;
     float2 s = two_sum(p, e);
     return ds_make(s.x, s.y);
 }
@@ -120,7 +129,7 @@ inline float4 palette_builtin(int palette, float t) {
 inline float4 palette_sample_lut(texture2d<float, access::sample> lutTex, sampler s, float t) {
     t = clamp(t, 0.0f, 1.0f);
     float w = float(lutTex.get_width());
-    if (w <= 0.5f) { // defensive: no LUT bound
+    if (w < 1.0f) { // defensive: no LUT bound
         return float4(0.0,0.0,0.0,0.0);
     }
     float x = (t * (w - 1.0f) + 0.5f) / w; // center of texels
@@ -130,7 +139,6 @@ inline float4 palette_sample_lut(texture2d<float, access::sample> lutTex, sample
 // ===== Kernel =====
 kernel void mandelbrotKernel(
     constant MandelbrotUniforms& u                 [[ buffer(0) ]],
-    const device float2*        refOrbit           [[ buffer(1) ]], // optional when perturbation off
     texture2d<float, access::write>  outTex        [[ texture(0) ]],
     texture2d<float, access::sample> paletteTex    [[ texture(1) ]],
     uint2 gid [[thread_position_in_grid]]
@@ -139,17 +147,17 @@ kernel void mandelbrotKernel(
     if (gid.x >= u.size.x || gid.y >= u.size.y) return;
 
     // Map pixel -> complex c (double-single mapping if deepMode)
-    float2 c;
-    if (u.deepMode != 0) {
+    bool useDS = (u.deepMode != 0);
+    float2 c = u.origin + float2(gid) * u.step; // legacy float mapping as fallback/UI
+    DS cDSx, cDSy;
+    if (useDS) {
         DS oR = ds_make(u.originHi.x, u.originLo.x);
         DS oI = ds_make(u.originHi.y, u.originLo.y);
         DS sR = ds_make(u.stepHi.x,   u.stepLo.x);
         DS sI = ds_make(u.stepHi.y,   u.stepLo.y);
-        DS cx = ds_add(oR, ds_mul_float(sR, float(gid.x)));
-        DS cy = ds_add(oI, ds_mul_float(sI, float(gid.y)));
-        c = float2(ds_to_float(cx), ds_to_float(cy));
-    } else {
-        c = u.origin + float2(gid) * u.step;
+        cDSx = ds_add(oR, ds_mul_float(sR, float(gid.x)));
+        cDSy = ds_add(oI, ds_mul_float(sI, float(gid.y)));
+        c = float2(ds_to_float(cDSx), ds_to_float(cDSy));
     }
 
     int maxIt = max(1, u.maxIt);
@@ -157,24 +165,26 @@ kernel void mandelbrotKernel(
     float2 z = float2(0.0f);
     float r2 = 0.0f;
 
-    if (u.perturbation != 0 && refOrbit != nullptr) {
-        // First-order perturbation around reference orbit at c0
-        // Renderer builds: orbit[i] = z_{i+1}, with z_0 = 0
-        float2 dz = float2(0.0, 0.0);        // dz_0 = 0
-        float2 dc = c - u.c0;                // small delta in c
+    // Plain Mandelbrot (no perturbation path)
+    if (useDS) {
+        DS x = ds_make(0.0f, 0.0f);
+        DS y = ds_make(0.0f, 0.0f);
+        DS cx = cDSx;
+        DS cy = cDSy;
         for (it = 0; it < maxIt; ++it) {
-            float2 zref_n = (it == 0) ? float2(0.0, 0.0) : refOrbit[it - 1];
-            // dz_{n+1} = 2*z_ref_n*dz_n + dc
-            float2 twozr = zref_n * 2.0f;
-            float2 dzn = float2(twozr.x * dz.x - twozr.y * dz.y,
-                                twozr.x * dz.y + twozr.y * dz.x) + dc;
-            dz = dzn;
-            z = zref_n + dz;                 // z_n approximation
-            r2 = dot(z, z);
+            DS x2 = ds_mul(x, x);
+            DS y2 = ds_mul(y, y);
+            DS xx = ds_add(ds_sub(x2, y2), cx);
+            DS xy = ds_mul(x, y);
+            DS yy = ds_add(ds_mul_float(xy, 2.0f), cy);
+            x = xx; y = yy;
+            float rx = ds_to_float(x);
+            float ry = ds_to_float(y);
+            r2 = rx*rx + ry*ry;
             if (r2 > 4.0f) break;
         }
+        z = float2(ds_to_float(x), ds_to_float(y));
     } else {
-        // Plain Mandelbrot
         float x = 0.0f, y = 0.0f;
         for (it = 0; it < maxIt; ++it) {
             float xx = x*x - y*y + c.x;
