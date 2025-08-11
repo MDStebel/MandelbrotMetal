@@ -46,6 +46,7 @@ final class MandelbrotRenderer: NSObject, MTKViewDelegate {
     
     private weak var mtkViewRef: MTKView?
     private var refinePending = false
+    private var highQualityIdle = true
 
     // MARK: - State
     var needsRender = true
@@ -71,11 +72,26 @@ final class MandelbrotRenderer: NSObject, MTKViewDelegate {
     private let deepZoomThreshold: Double = 1.0e4
 
     // MARK: - Public knobs (called from UI)
-    /// Keep pixelStep at 1 (full-res); only adjust iterations while interacting.
+    /// Toggle between interactive (fast) and idle (refined) rendering, and trigger a render immediately.
     func setInteractive(_ on: Bool, baseIterations: Int) {
+        // Always render at full pixel resolution; vary quality via iterations and sub‑pixel samples.
         uniforms.pixelStep = 1
-        uniforms.maxIt = Int32(on ? max(50, baseIterations / 2) : baseIterations)
+
+        if on {
+            // FAST path while user is touching: fewer iterations, single sample, no refine queued
+            uniforms.maxIt = Int32(max(50, baseIterations / 2))
+            uniforms.subpixelSamples = 1
+            refinePending = false
+        } else {
+            // IDLE path: restore iterations target; queue a refine pass if enabled
+            uniforms.maxIt = Int32(max(1, baseIterations))
+            uniforms.subpixelSamples = 1   // first pass
+            refinePending = highQualityIdle // schedule 4× pass after this frame
+        }
+
         needsRender = true
+        // Ensure MTKView wakes up to draw the pass immediately
+        DispatchQueue.main.async { [weak self] in self?.mtkViewRef?.setNeedsDisplay() }
     }
 
     func setPalette(_ mode: Int) {
@@ -86,13 +102,27 @@ final class MandelbrotRenderer: NSObject, MTKViewDelegate {
     func setMaxIterations(_ it: Int) {
         uniforms.maxIt = Int32(max(1, it))
         uniforms.subpixelSamples = 1
-        refinePending = true
+        refinePending = highQualityIdle
         needsRender = true
     }
 
     func setDeepZoom(_ on: Bool) {
         // Deep Zoom is now always-on; keep method for API compatibility.
         uniforms.deepMode = 1
+        needsRender = true
+    }
+
+    func setHighQualityIdle(_ on: Bool) {
+        highQualityIdle = on
+        if on {
+            // schedule a refine on next frame
+            uniforms.subpixelSamples = 1
+            refinePending = true
+        } else {
+            // stick to single-sample; cancel any queued refine
+            uniforms.subpixelSamples = 1
+            refinePending = false
+        }
         needsRender = true
     }
 
@@ -209,7 +239,7 @@ final class MandelbrotRenderer: NSObject, MTKViewDelegate {
 
         allocateTextureIfNeeded(width: pixelW, height: pixelH)
         uniforms.subpixelSamples = 1
-        refinePending = true
+        refinePending = highQualityIdle
         needsRender = true
     }
 
@@ -308,8 +338,8 @@ final class MandelbrotRenderer: NSObject, MTKViewDelegate {
         drawable.present()
         cmd.addCompletedHandler { [weak self] _ in
             guard let self else { return }
-            if self.refinePending {
-                self.uniforms.subpixelSamples = 4   // ✅ 2×2 SSAA refine
+            if self.highQualityIdle && self.refinePending {
+                self.uniforms.subpixelSamples = 4
                 self.needsRender = true
                 self.refinePending = false
                 DispatchQueue.main.async { self.mtkViewRef?.setNeedsDisplay() }

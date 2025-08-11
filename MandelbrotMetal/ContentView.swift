@@ -194,6 +194,9 @@ struct ContentView: View {
     @State private var customH: String = "2160"
     @State private var showCustomRes = false
     private let kPaletteNameKey = "palette_name_v1"
+    @State private var highQualityIdleRender: Bool = true
+    @State private var isInteracting: Bool = false
+    private let kHQIdleKey = "hq_idle_render_v1"
     
     var body: some View {
         GeometryReader { geo in
@@ -240,6 +243,8 @@ struct ContentView: View {
                 vm.pushViewport(currentPointsSize(geo.size), screenScale: currentScreenScale())
                 vm.requestDraw()
                 vm.renderer?.setDeepZoom(true)
+                vm.renderer?.setHighQualityIdle(highQualityIdleRender)
+                vm.renderer?.setInteractive(false, baseIterations: vm.maxIterations)
 
                 // Restore palette by saved name if available; otherwise fall back to index
                 if let savedName = UserDefaults.standard.string(forKey: kPaletteNameKey),
@@ -249,6 +254,9 @@ struct ContentView: View {
                     vm.renderer?.setPalette(palette)
                     currentPaletteName = (palette == 0 ? "HSV" : palette == 1 ? "Fire" : palette == 2 ? "Ocean" : currentPaletteName)
                     vm.requestDraw()
+                }
+                if UserDefaults.standard.object(forKey: kHQIdleKey) != nil {
+                    highQualityIdleRender = UserDefaults.standard.bool(forKey: kHQIdleKey)
                 }
                 loadBookmarks()
                 // Listen for renderer fallbacks (perturbation/LUT resource issues)
@@ -271,6 +279,19 @@ struct ContentView: View {
                 vm.pushViewport(currentPointsSize(newSize), screenScale: currentScreenScale())
             }
             .onChange(of: palette) { persistPaletteSelection() }
+            .onChange(of: highQualityIdleRender) { newValue in
+                UserDefaults.standard.set(newValue, forKey: kHQIdleKey)
+                vm.renderer?.setHighQualityIdle(newValue)
+                // Re-evaluate interactive mode based on the switch
+                let interactiveNow = newValue ? isInteracting : true
+                vm.renderer?.setInteractive(interactiveNow, baseIterations: vm.maxIterations)
+                vm.requestDraw()
+            }
+            .onChange(of: isInteracting) { active in
+                let interactiveNow = highQualityIdleRender ? active : true
+                vm.renderer?.setInteractive(interactiveNow, baseIterations: vm.maxIterations)
+                vm.requestDraw()
+            }
             .onChange(of: currentPaletteName) { _ in persistPaletteSelection() }
             .onChange(of: vm.center)               { vm.saveState(perturb: false, deep: true, palette: palette) }
             .onChange(of: vm.scalePixelsPerUnit)   { vm.saveState(perturb: false, deep: true, palette: palette) }
@@ -366,6 +387,7 @@ struct ContentView: View {
                     showPalettePicker: $showPalettePicker,
                     autoIterations: $autoIterations,
                     iterations: $vm.maxIterations,
+                    highQualityIdle: $highQualityIdleRender,
                     snapRes: $snapRes,
                     paletteOptions: paletteOptions,
                     applyPalette: { opt in
@@ -410,9 +432,13 @@ struct ContentView: View {
 
     @ViewBuilder
     private func fractalCanvas(_ geo: GeometryProxy) -> some View {
-        let doubleTap = SpatialTapGesture(count: 2).onEnded { value in
-            doubleTapZoom(point: value.location, size: geo.size, factor: 2.0)
-        }
+        let doubleTap = SpatialTapGesture(count: 2)
+            .onChanged { _ in isInteracting = true }
+            .onEnded { value in
+                isInteracting = true
+                doubleTapZoom(point: value.location, size: geo.size, factor: 2.0)
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { isInteracting = false }
+            }
 
         MetalFractalView(vm: vm)
             .ignoresSafeArea()
@@ -991,6 +1017,7 @@ struct ContentView: View {
                     // Modes (Auto Iter only; Deep Zoom always on)
                     HStack(spacing: 16) {
                         LabeledToggle(title: "Auto Iter", systemImage: "aqi.medium", isOn: $autoIterations)
+                        LabeledToggle(title: "HQ idle", systemImage: "sparkles", isOn: $highQualityIdleRender)
                     }
 
                     Divider().frame(height: 22).opacity(0.2)
@@ -1171,19 +1198,23 @@ struct ContentView: View {
     private func panAndZoom(_ size: CGSize) -> some Gesture {
         let pinch = MagnificationGesture()
             .onChanged { value in
+                isInteracting = true
                 pendingScale = value
                 liveUpdate(size: size)
             }
             .onEnded { value in
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.10) { isInteracting = false }
                 applyPinch(value, size: size)
             }
         
         let drag = DragGesture(minimumDistance: 0)
             .onChanged { value in
+                isInteracting = true
                 pendingCenter = dragToComplex(value.translation)
                 liveUpdate(size: size)
             }
             .onEnded { value in
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.10) { isInteracting = false }
                 applyDrag(value, size: size)
             }
         
@@ -1296,10 +1327,12 @@ struct ContentView: View {
 
         // Reset iterations to minimum and restart auto-iter baseline
         vm.maxIterations = 100
+        isInteracting = false
         vm.baselineScale = 1   // so autoIterations recalibrates from the new start
 
         // Apply to renderer immediately
         vm.renderer?.setMaxIterations(vm.maxIterations)
+        vm.renderer?.setInteractive(false, baseIterations: vm.maxIterations)
 
         // Push + draw
         vm.pushViewport(currentPointsSize(size), screenScale: currentScreenScale())
@@ -1467,6 +1500,7 @@ struct ContentView: View {
             customH = String(Int(ds.height.rounded(.toNearestOrAwayFromZero)))
             snapRes = .canvas   // <- was .custom
         }
+        isInteracting = false
         showCaptureSheet = true
     }
 
@@ -1574,6 +1608,10 @@ private struct HelpView: View {
 
                 sectionHeader("Rendering Modes")
                 Text("**Deep Zoom** switches the kernel into higher‑precision math (double‑single) for extreme magnifications to mitigate precision artifacts.")
+                    .foregroundStyle(.primary)
+
+                sectionHeader("Quality")
+                Text("**High‑Quality while idle** renders a sharper preview whenever you’re not touching the screen. It increases precision and may temporarily raise iterations in the background to refine details. This looks better at deep zooms but can use a bit more battery.")
                     .foregroundStyle(.primary)
 
                 sectionHeader("Color & Palettes")
@@ -1759,6 +1797,7 @@ private struct CompactOptionsSheet: View {
     @Binding var showPalettePicker: Bool
     @Binding var autoIterations: Bool
     @Binding var iterations: Int
+    @Binding var highQualityIdle: Bool
     @Binding var snapRes: ContentView.SnapshotRes
     
     let paletteOptions: [ContentView.PaletteOption]
@@ -1788,6 +1827,22 @@ private struct CompactOptionsSheet: View {
                     }
                 } header: {
                     Text("Iterations")
+                }
+
+                Section {
+                    HStack {
+                        Label("High‑Quality while idle", systemImage: "sparkles")
+                        Spacer()
+                        Toggle("", isOn: $highQualityIdle)
+                            .labelsHidden()
+                            .toggleStyle(AccessibleSwitchToggleStyle())
+                    }
+                    .accessibilityElement(children: .combine)
+                    .accessibilityLabel("High‑Quality while idle")
+                } header: {
+                    Text("Quality")
+                } footer: {
+                    Text("When on, the app renders at higher quality whenever you’re not touching the screen.")
                 }
 
                 Section {
