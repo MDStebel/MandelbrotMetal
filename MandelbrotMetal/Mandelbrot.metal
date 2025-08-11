@@ -15,6 +15,7 @@ struct MandelbrotUniforms {
     float2  stepLo;
     int     perturbation; // ignored (not used in this kernel)
     float2  c0;           // ignored here
+    int     subpixelSamples; // 1, 2, or 4 (we'll use 1 or 4)
 };
 
 inline float fractf(float x) { return x - floor(x); }
@@ -106,67 +107,80 @@ kernel void mandelbrotKernel(
 ) {
     if (gid.x >= u.size.x || gid.y >= u.size.y) return;
 
-    // Map pixel -> complex plane (supports Hi/Lo splits if deepMode != 0)
-    float2 p = float2((float)gid.x, (float)gid.y);
-    float2 c;
-    if (u.deepMode != 0) {
-        float2 cHi = u.originHi + u.stepHi * p;
-        float2 cLo = u.originLo + u.stepLo * p;
-        c = cHi + cLo;   // simple compensated add (cheap, helpful at deep zoom)
-    } else {
-        c = u.origin + u.step * p;
+    int S = max(1, u.subpixelSamples);
+    float3 rgbAccum = float3(0.0);
+
+    for (int sy = 0; sy < S; ++sy) {
+        for (int sx = 0; sx < S; ++sx) {
+            // Map pixel -> complex plane (supports Hi/Lo splits if deepMode != 0)
+            float2 p = float2((float)gid.x, (float)gid.y);
+            // subpixel offset in [0,1) pixels
+            float2 sub = float2(((float)sx + 0.5f) / (float)S, ((float)sy + 0.5f) / (float)S);
+            p += sub;
+
+            float2 c;
+            if (u.deepMode != 0) {
+                float2 cHi = u.originHi + u.stepHi * p;
+                float2 cLo = u.originLo + u.stepLo * p;
+                c = cHi + cLo;
+            } else {
+                c = u.origin + u.step * p;
+            }
+
+            // ---- Interior tests (cardioid + period‑2 bulb)
+            {
+                float xC = c.x;
+                float yC = c.y;
+                float x1 = xC + 1.0f;
+                if ((x1 * x1 + yC * yC) < 0.0625f) {
+                    // interior: black
+                    rgbAccum += float3(0.0);
+                    continue;
+                }
+                float xq = xC - 0.25f;
+                float q = xq * xq + yC * yC;
+                if (q * (q + xq) < 0.25f * yC * yC) {
+                    rgbAccum += float3(0.0);
+                    continue;
+                }
+            }
+
+            // Iterate
+            float2 z = float2(0.0, 0.0);
+            int i = 0;
+            const int maxIt = max(1, u.maxIt);
+            for (; i < maxIt; ++i) {
+                float x = z.x, y = z.y;
+                float xx = x*x - y*y + c.x;
+                float yy = 2.0f*x*y + c.y;
+                z = float2(xx, yy);
+                if (dot(z, z) > 4.0f) break;
+            }
+
+            float3 rgb;
+            if (i >= maxIt) {
+                rgb = float3(0.0);
+            } else {
+                // Smooth coloring (blended)
+                float r2 = max(dot(z, z), 1.0f + 1e-12f);
+                float nu = (float)i + 1.0f - log2(max(1e-12f, log(sqrt(r2))));
+                float tRaw  = clamp(nu / (float)maxIt, 0.0f, 1.0f);
+                float k     = lerpf(6.0f, 14.0f, clamp(((float)maxIt - 500.0f) / 4500.0f, 0.0f, 1.0f));
+                float tComp = clamp(nu / (nu + k), 0.0f, 1.0f);
+                float t = lerpf(tComp, tRaw, 0.80f);
+                t = clamp((t - 0.02f) / 0.96f, 0.0f, 1.0f);
+                t = pow(t, 0.90f);
+                const float cycles = 1.50f;
+                float tColor = fractf(t * cycles);
+                constexpr sampler s(address::clamp_to_edge, filter::linear);
+                rgb = pickColor(u.palette, tColor, lut, s);
+            }
+            rgbAccum += rgb;
+        }
     }
 
-    // Iterate
-    float2 z = float2(0.0, 0.0);
-    int i = 0;
-    const int maxIt = max(1, u.maxIt);
-
-    // fast escape loop
-    for (; i < maxIt; ++i) {
-        // z = z^2 + c
-        float x = z.x, y = z.y;
-        float xx = x*x - y*y + c.x;
-        float yy = 2.0f*x*y + c.y;
-        z = float2(xx, yy);
-
-        if (dot(z, z) > 4.0f) break;
-    }
-
-    float3 rgb;
-    if (i >= maxIt) {
-        // interior: solid black (or tweakable)
-        rgb = float3(0.0, 0.0, 0.0);
-    } else {
-        // ---- Smooth (continuous) coloring: blended for stability + punch ----
-        float r2 = dot(z, z);
-        r2 = max(r2, 1.0f + 1e-12f); // guard
-        float nu = (float)i + 1.0f - log2(max(1e-12f, log(sqrt(r2))));
-
-        // Two normalizations
-        float tRaw  = clamp(nu / (float)maxIt, 0.0f, 1.0f);
-
-        // Adaptive k: lower at small maxIt, higher at large maxIt (6..14 range)
-        float k     = lerpf(6.0f, 14.0f, clamp(((float)maxIt - 500.0f) / 4500.0f, 0.0f, 1.0f));
-        float tComp = clamp(nu / (nu + k), 0.0f, 1.0f);
-
-        // Blend: lean more toward raw for punch, keep stability from tComp
-        float t = lerpf(tComp, tRaw, 0.80f);
-
-        // Mild contrast stretch (avoid clipping, lift mids)
-        t = clamp((t - 0.02f) / 0.96f, 0.0f, 1.0f);
-
-        // Slightly stronger gamma for vibrance in mid‑tones
-        t = pow(t, 0.90f);
-
-        // Subtle palette cycling so color varies more with detail
-        const float cycles = 1.50f;
-        float tColor = fractf(t * cycles);
-
-        // Sample palette (built‑ins or LUT)
-        constexpr sampler s(address::clamp_to_edge, filter::linear);
-        rgb = pickColor(u.palette, tColor, lut, s);
-    }
-
+    float invN = 1.0f / (float)(S * S);
+    float3 rgb = rgbAccum * invN;
     outTex.write(float4(rgb, 1.0), gid);
+    return;
 }

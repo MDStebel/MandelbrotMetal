@@ -29,6 +29,7 @@ struct MandelbrotUniforms {
     var stepLo: SIMD2<Float>
     var perturbation: Int32
     var c0: SIMD2<Float>
+    var subpixelSamples: Int32
 }
 
 final class MandelbrotRenderer: NSObject, MTKViewDelegate {
@@ -42,6 +43,9 @@ final class MandelbrotRenderer: NSObject, MTKViewDelegate {
     private var outTex: MTLTexture?
     private var paletteTexture: MTLTexture?
     private var dummyPaletteTex: MTLTexture?
+    
+    private weak var mtkViewRef: MTKView?
+    private var refinePending = false
 
     // MARK: - State
     var needsRender = true
@@ -59,7 +63,8 @@ final class MandelbrotRenderer: NSObject, MTKViewDelegate {
         stepHi: .zero,
         stepLo: .zero,
         perturbation: 0,
-        c0: .zero         
+        c0: .zero,
+        subpixelSamples: 1
     )
 
     // Enable deep precision sooner to reduce blockiness
@@ -80,6 +85,8 @@ final class MandelbrotRenderer: NSObject, MTKViewDelegate {
 
     func setMaxIterations(_ it: Int) {
         uniforms.maxIt = Int32(max(1, it))
+        uniforms.subpixelSamples = 1
+        refinePending = true
         needsRender = true
     }
 
@@ -134,6 +141,7 @@ final class MandelbrotRenderer: NSObject, MTKViewDelegate {
         }
 
         super.init()
+        mtkViewRef = mtkView
 
         // MTKView config
         mtkView.device = device
@@ -200,6 +208,8 @@ final class MandelbrotRenderer: NSObject, MTKViewDelegate {
         uniforms.stepLo   = SIMD2<Float>(sXLo, sYLo)
 
         allocateTextureIfNeeded(width: pixelW, height: pixelH)
+        uniforms.subpixelSamples = 1
+        refinePending = true
         needsRender = true
     }
 
@@ -296,6 +306,15 @@ final class MandelbrotRenderer: NSObject, MTKViewDelegate {
         }
 
         drawable.present()
+        cmd.addCompletedHandler { [weak self] _ in
+            guard let self else { return }
+            if self.refinePending {
+                self.uniforms.subpixelSamples = 4   // ✅ 2×2 SSAA refine
+                self.needsRender = true
+                self.refinePending = false
+                DispatchQueue.main.async { self.mtkViewRef?.setNeedsDisplay() }
+            }
+        }
         cmd.commit()
         needsRender = false
     }
