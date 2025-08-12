@@ -1,34 +1,49 @@
 #include <metal_stdlib>
 using namespace metal;
 
-// ======= Uniforms (must match Swift exactly) =======
+// =============================================================
+// Uniforms — MUST MATCH Swift's MandelbrotUniforms field order
+// =============================================================
 struct MandelbrotUniforms {
-    float2 origin;          // base float mapping
+    float2 origin;        // base float mapping (normal precision)
     float2 step;
     int    maxIt;
-    uint2  size;
-    int    pixelStep;       // reserved (unused here)
+    uint2  size;          // render target size (pixels)
+    int    pixelStep;     // reserved
+
     int    subpixelSamples; // 1 or 4
     int    palette;         // 0=HSV,1=Fire,2=Ocean,3=LUT
-    int    deepMode;        // 0=float map, 1=double‑single map
-    int    _pad0;           // keep 16B alignment
-    float2 originHi;        // DS split for mapping
+    int    deepMode;        // 0=float mapping, 1=double-single mapping
+    int    _pad0;           // alignment padding
+
+    // Double-single mapping splits
+    float2 originHi;
     float2 originLo;
     float2 stepHi;
     float2 stepLo;
+
+    // Perturbation (optional; kernel ignores if refCount==0)
+    int    perturbation;  // 0/1
+    int    refCount;      // orbit length
+    float2 c0;            // reference c
+    float2 _pad1;         // alignment padding
 };
 
-// ======= helpers =======
-inline float  fractf(float x) { return x - floor(x); }
+// =============================================================
+// Small helpers
+// =============================================================
+inline float fractf(float x) { return x - floor(x); }
 inline float  lerpf(float a, float b, float t) { return a + (b - a) * t; }
 inline float3 lerp3(float3 a, float3 b, float t) { return a + (b - a) * t; }
-inline float  saturate01(float x) { return clamp(x, 0.0f, 1.0f); }
+inline float  saturate(float x) { return clamp(x, 0.0f, 1.0f); }
 
-// ======= palettes =======
+// =============================================================
+// Simple palettes + optional LUT
+// =============================================================
 inline float3 hsv(float h, float s, float v) {
-    float r = fabs(h * 6.0 - 3.0) - 1.0;
-    float g = 2.0 - fabs(h * 6.0 - 2.0);
-    float b = 2.0 - fabs(h * 6.0 - 4.0);
+    float r = abs(h * 6.0 - 3.0) - 1.0;
+    float g = 2.0 - abs(h * 6.0 - 2.0);
+    float b = 2.0 - abs(h * 6.0 - 4.0);
     float3 rgb = clamp(float3(r,g,b), 0.0, 1.0);
     return ((rgb - 1.0) * s + 1.0) * v;
 }
@@ -58,20 +73,17 @@ inline float3 paletteOcean(float t) {
     else                return lerp3(d, e, (t - 0.75) / 0.25);
 }
 
-// 1‑D LUT as 1×W or H×1 texture
 inline float3 paletteLUT(texture2d<float, access::sample> lut, float t, sampler s) {
     uint w = lut.get_width();
     uint h = lut.get_height();
     if (w <= 1 && h <= 1) return paletteHSV(t);
     float u = clamp(t, 0.0, 1.0);
-    return (w > 1) ? lut.sample(s, float2(u, 0.5)).rgb
-                   : lut.sample(s, float2(0.5, u)).rgb;
+    if (w > 1) return lut.sample(s, float2(u, 0.5)).rgb;
+    else       return lut.sample(s, float2(0.5, u)).rgb;
 }
-
 inline float3 pickColor(int palette, float t,
                         texture2d<float, access::sample> paletteTex,
-                        sampler s)
-{
+                        sampler s) {
     switch (palette) {
         case 1: return paletteFire(t);
         case 2: return paletteOcean(t);
@@ -80,83 +92,64 @@ inline float3 pickColor(int palette, float t,
     }
 }
 
-// ======= Double‑single (two‑float) arithmetic =======
+// =============================================================
+// Double-single arithmetic (ds2)
+// =============================================================
 struct ds2 { float hi; float lo; };
-inline ds2 ds_make(float x) { return { x, 0.0f }; }
+inline ds2 ds_make(float hi, float lo) { return {hi, lo}; }
+inline ds2 ds_from_float(float x)      { return {x, 0.0f}; }
 
 inline ds2 ds_add(ds2 a, ds2 b) {
     float s = a.hi + b.hi;
     float v = s - a.hi;
-    float e = (a.hi - (s - v)) + (b.hi - v) + a.lo + b.lo;
-    float res_hi = s + e;
-    float res_lo = e - (res_hi - s);
-    return { res_hi, res_lo };
+    float t = ((b.hi - v) + (a.hi - (s - v))) + a.lo + b.lo;
+    return { s + t, t - ((s + t) - s) };
 }
-inline ds2 ds_add_f(ds2 a, float b) { return ds_add(a, ds_make(b)); }
-
+inline ds2 ds_sub(ds2 a, ds2 b) { return ds_add(a, {-b.hi, -b.lo}); }
 inline ds2 ds_mul(ds2 a, ds2 b) {
     float p = a.hi * b.hi;
-    float e = fma(a.hi, b.hi, -p) + (a.hi * b.lo + a.lo * b.hi);
-    float res_hi = p + e;
-    float res_lo = e - (res_hi - p);
-    return { res_hi, res_lo };
+    float e = fma(a.hi, b.hi, -p) + a.hi * b.lo + a.lo * b.hi;
+    float s = p + e;
+    return { s, (p - s) + e };
 }
-inline ds2 ds_mul_f(ds2 a, float b) { return ds_mul(a, ds_make(b)); }
-
-inline void ds_square_add(ds2 zx, ds2 zy, ds2 cx, ds2 cy, thread ds2 &outx, thread ds2 &outy) {
-    ds2 x2 = ds_mul(zx, zx);
-    ds2 y2 = ds_mul(zy, zy);
-    ds2 real = ds_add(x2, { -y2.hi, -y2.lo });
-    real = ds_add(real, cx);
-    ds2 xy = ds_mul(zx, zy);
-    ds2 imag = ds_mul_f(xy, 2.0f);
-    imag = ds_add(imag, cy);
-    outx = real; outy = imag;
+inline ds2 ds_mul_f(ds2 a, float f) {
+    float p = a.hi * f;
+    float e = fma(a.hi, f, -p) + a.lo * f;
+    float s = p + e;
+    return { s, (p - s) + e };
 }
 inline float ds_to_float(ds2 a) { return a.hi + a.lo; }
 
-// ======= Mapping =======
+// =============================================================
+// Mapping + interior tests
+// =============================================================
 inline float2 mapComplexF(uint2 gid, constant MandelbrotUniforms &u) {
     return float2(u.origin.x + u.step.x * (float)gid.x,
                   u.origin.y + u.step.y * (float)gid.y);
 }
-
-// DS mapping that **returns ds2** (no precision drop)
 inline void mapComplexDS(uint2 gid, constant MandelbrotUniforms &u,
-                         thread ds2 &cx, thread ds2 &cy)
-{
-    float ix = (float)gid.x;
-    float iy = (float)gid.y;
-
-    // hi part
-    ds2 baseX = ds_make(u.originHi.x + u.stepHi.x * ix);
-    ds2 baseY = ds_make(u.originHi.y + u.stepHi.y * iy);
-    // add lo part exactly
-    baseX = ds_add(baseX, ds_make(u.originLo.x + u.stepLo.x * ix));
-    baseY = ds_add(baseY, ds_make(u.originLo.y + u.stepLo.y * iy));
-
-    cx = baseX; cy = baseY;
+                         thread ds2 &cx, thread ds2 &cy) {
+    float ix = (float)gid.x, iy = (float)gid.y;
+    float cxh = u.originHi.x + u.stepHi.x * ix;
+    float cyh = u.originHi.y + u.stepHi.y * iy;
+    float cxl = u.originLo.x + u.stepLo.x * ix;
+    float cyl = u.originLo.y + u.stepLo.y * iy;
+    cx = { cxh, cxl };
+    cy = { cyh, cyl };
+}
+inline bool inInteriorF(float2 c) {
+    float xp1 = c.x + 1.0f;
+    if ((xp1 * xp1 + c.y * c.y) < 0.0625f) return true; // period-2 bulb
+    float xq = c.x - 0.25f;
+    float q = xq * xq + c.y * c.y;
+    return (q * (q + xq)) < (0.25f * c.y * c.y);        // main cardioid
 }
 
-// ======= Iteration in DS (c is ds2) =======
-inline int iterateMandelDS(ds2 cx, ds2 cy, int maxIt, thread float &outX, thread float &outY) {
-    ds2 zx = { 0.0f, 0.0f }, zy = { 0.0f, 0.0f };
-    int i = 0;
-    for (; i < maxIt; ++i) {
-        ds2 nx, ny;
-        ds_square_add(zx, zy, cx, cy, nx, ny);
-        zx = nx; zy = ny;
-        float x = zx.hi, y = zy.hi;              // fast escape using hi
-        if (x*x + y*y > 4.0f) break;
-    }
-    outX = ds_to_float(zx);
-    outY = ds_to_float(zy);
-    return i;
-}
-
-// ======= Iteration in float (fallback / shallow) =======
-inline int iterateMandelF(float2 c, int maxIt, thread float &outX, thread float &outY) {
-    float zx = 0.0f, zy = 0.0f;
+// =============================================================
+// Iteration — float & DS variants
+// =============================================================
+inline int iterateMandelF(float2 c, int maxIt, thread float &zx, thread float &zy) {
+    zx = 0.0f; zy = 0.0f;
     int i = 0;
     for (; i < maxIt; ++i) {
         float xx = zx*zx - zy*zy + c.x;
@@ -164,104 +157,94 @@ inline int iterateMandelF(float2 c, int maxIt, thread float &outX, thread float 
         zx = xx; zy = yy;
         if (zx*zx + zy*zy > 4.0f) break;
     }
-    outX = zx; outY = zy;
+    return i;
+}
+inline int iterateMandelDS(ds2 cx, ds2 cy, int maxIt, thread float &zxOut, thread float &zyOut) {
+    ds2 zx = ds_from_float(0.0f), zy = ds_from_float(0.0f);
+    int i = 0;
+    for (; i < maxIt; ++i) {
+        ds2 zx2 = ds_mul(zx, zx);
+        ds2 zy2 = ds_mul(zy, zy);
+        ds2 xx  = ds_sub(zx2, zy2);
+        ds2 yy  = ds_mul(ds_make(2.0f, 0.0f), ds_mul(zx, zy));
+        zx = ds_add(xx, cx);
+        zy = ds_add(yy, cy);
+        float r2 = ds_to_float(zx)*ds_to_float(zx) + ds_to_float(zy)*ds_to_float(zy);
+        if (r2 > 4.0f) break;
+    }
+    zxOut = ds_to_float(zx);
+    zyOut = ds_to_float(zy);
     return i;
 }
 
-// ======= Interior tests (float) =======
-inline bool inInteriorF(float2 c) {
-    float xp1 = c.x + 1.0f;
-    if ((xp1 * xp1 + c.y * c.y) < 0.0625f) return true;
-    float xq = c.x - 0.25f;
-    float q  = xq * xq + c.y * c.y;
-    return (q * (q + xq) < 0.25f * c.y * c.y);
-}
-
-// ======= Kernel =======
+// =============================================================
+// Kernel
+// =============================================================
 kernel void mandelbrotKernel(
-    constant MandelbrotUniforms& u [[buffer(0)]],
-    texture2d<float, access::write> outTex [[texture(0)]],
+    constant MandelbrotUniforms& u              [[buffer(0)]],
+    const device float2 *refOrbit               [[buffer(1)]], // kept for ABI stability
+    texture2d<float, access::write> outTex      [[texture(0)]],
     texture2d<float, access::sample> paletteTex [[texture(1)]],
     uint2 gid [[thread_position_in_grid]]
 ) {
     if (gid.x >= u.size.x || gid.y >= u.size.y) return;
 
-    constexpr sampler s(address::clamp_to_edge, filter::linear);
+    constexpr sampler samp(address::clamp_to_edge, filter::linear);
 
-    // Sub‑pixel locations for 2×2 SS (rotated grid)
+    // 2×2 SSAA (rotated grid)
     const float2 offsets[4] = {
         float2( 0.25,  0.25),
         float2(-0.25,  0.25),
         float2( 0.25, -0.25),
         float2(-0.25, -0.25)
     };
-    int spp = max(1, u.subpixelSamples); // 1 or 4
+    int spp = max(1, u.subpixelSamples);
 
     float3 acc = float3(0.0);
 
-    for (int sidx = 0; sidx < spp; ++sidx) {
-        // ==== map to c ====
+    for (int s = 0; s < spp; ++s) {
         if (u.deepMode != 0) {
-            // DS path: keep c in ds2 from the start
-            ds2 cx, cy;
-            mapComplexDS(gid, u, cx, cy);
-
-            // apply sub‑pixel offset in DS space
+            ds2 cx, cy; mapComplexDS(gid, u, cx, cy);
             if (spp > 1) {
                 ds2 sx = { u.stepHi.x, u.stepLo.x };
                 ds2 sy = { u.stepHi.y, u.stepLo.y };
-                float2 off = offsets[sidx];
+                float2 off = offsets[s];
                 cx = ds_add(cx, ds_mul_f(sx, off.x));
                 cy = ds_add(cy, ds_mul_f(sy, off.y));
             }
-
-            // interior test in float (cheap)
+            float zx, zy;
             float2 cf = float2(ds_to_float(cx), ds_to_float(cy));
             if (!inInteriorF(cf)) {
-                float zx, zy;
                 int it = iterateMandelDS(cx, cy, max(1, u.maxIt), zx, zy);
-
-                float3 rgb;
-                if (it >= u.maxIt) {
-                    rgb = float3(0.0);
-                } else {
+                if (it < u.maxIt) {
                     float r2 = max(zx*zx + zy*zy, 1.0f + 1e-12f);
                     float log_zn = 0.5f * log(r2);
                     float nu = log(log_zn / log(2.0f)) / log(2.0f);
                     float mu = (float)it + 1.0f - clamp(nu, 0.0f, 1.0f);
                     float t = clamp(mu / (float)max(1, u.maxIt), 0.0f, 1.0f);
                     t = clamp((t - 0.015f) / 0.97f, 0.0f, 1.0f);
-                    rgb = pickColor(u.palette, t, paletteTex, s);
+                    acc += pickColor(u.palette, t, paletteTex, samp);
                 }
-                acc += rgb;
             }
-            // else interior → contributes black (no add)
-
         } else {
-            // float path
             float2 c = mapComplexF(gid, u);
-            if (spp > 1) c += u.step * offsets[sidx];
-
+            if (spp > 1) c += u.step * offsets[s];
             if (!inInteriorF(c)) {
                 float zx, zy;
                 int it = iterateMandelF(c, max(1, u.maxIt), zx, zy);
-
-                float3 rgb;
-                if (it >= u.maxIt) {
-                    rgb = float3(0.0);
-                } else {
+                if (it < u.maxIt) {
                     float r2 = max(zx*zx + zy*zy, 1.0f + 1e-12f);
                     float log_zn = 0.5f * log(r2);
                     float nu = log(log_zn / log(2.0f)) / log(2.0f);
                     float mu = (float)it + 1.0f - clamp(nu, 0.0f, 1.0f);
                     float t = clamp(mu / (float)max(1, u.maxIt), 0.0f, 1.0f);
                     t = clamp((t - 0.015f) / 0.97f, 0.0f, 1.0f);
-                    acc += pickColor(u.palette, t, paletteTex, s);
+                    acc += pickColor(u.palette, t, paletteTex, samp);
                 }
             }
         }
     }
 
-    float inv = 1.0f / (float)spp;
-    outTex.write(float4(acc * inv, 1.0), gid);
+    float3 rgb = (spp > 1) ? acc / (float)spp : acc;
+    outTex.write(float4(rgb, 1.0), gid);
 }
