@@ -65,6 +65,11 @@ final class MandelbrotRenderer: NSObject, MTKViewDelegate {
     var needsRender = true
     private var refinePending = false
     private var highQualityIdle = true
+    // Adaptive perturbation refresh tracking
+    private var lastC0: SIMD2<Double>? = nil
+    private var lastInvScale: Double = .infinity
+    private let orbitRecenterPixels: Double = 64.0      // rebuild if center drifts > this many pixels
+    private let zoomRefreshRelChange: Double = 0.25     // rebuild if |Δzoom|/zoom > 25%
 
     // Tunables
     private let deepZoomThreshold: Double = 1.0e4 // switch to DS mapping earlier
@@ -174,17 +179,13 @@ final class MandelbrotRenderer: NSObject, MTKViewDelegate {
         uniforms.maxIt = Int32(max(1, it))
         refinePending = highQualityIdle
         needsRender = true
-        if uniforms.perturbation != 0 {
-            // Rebuild orbit so its length/values match the new iteration cap
-            let w = Int(uniforms.size.x)
-            let h = Int(uniforms.size.y)
+        if uniforms.perturbation != 0, Int(uniforms.maxIt) > Int(uniforms.refCount) {
+            // Extend / rebuild at current view center
+            let w = Int(uniforms.size.x), h = Int(uniforms.size.y)
             if w > 0 && h > 0 {
                 let c0x = Double(uniforms.origin.x) + Double(w) * 0.5 * Double(uniforms.step.x)
                 let c0y = Double(uniforms.origin.y) + Double(h) * 0.5 * Double(uniforms.step.y)
                 buildReferenceOrbit(c0: SIMD2<Double>(c0x, c0y), maxIt: Int(uniforms.maxIt))
-            } else {
-                // If we don't have a valid size yet, clear refCount so the kernel won’t read stale data
-                uniforms.refCount = 0
             }
         }
     }
@@ -253,6 +254,42 @@ final class MandelbrotRenderer: NSObject, MTKViewDelegate {
         let originY = center.y - halfH * invScale
         uniforms.origin = .init(Float(originX), Float(originY))
         uniforms.step   = .init(Float(invScale), Float(invScale))
+        
+        // --- Adaptive perturbation refresh ---
+        if uniforms.perturbation != 0 {
+            let w = Int(uniforms.size.x), h = Int(uniforms.size.y)
+            if w > 0 && h > 0 {
+                // current center as c0 for a fresh orbit
+                let curC0x = Double(uniforms.origin.x) + Double(w) * 0.5 * Double(uniforms.step.x)
+                let curC0y = Double(uniforms.origin.y) + Double(h) * 0.5 * Double(uniforms.step.y)
+                let curC0  = SIMD2<Double>(curC0x, curC0y)
+
+                // check zoom change
+                let needZoomRefresh: Bool = {
+                    guard lastInvScale.isFinite else { return true }
+                    let rel = abs(invScale - lastInvScale) / max(1e-15, abs(lastInvScale))
+                    return rel >= zoomRefreshRelChange
+                }()
+
+                // check drift from previous c0 in pixel units
+                let needDriftRefresh: Bool = {
+                    guard let prev = lastC0 else { return true }
+                    let dx = abs(curC0.x - prev.x)
+                    let dy = abs(curC0.y - prev.y)
+                    let driftThresh = orbitRecenterPixels * invScale
+                    return (dx > driftThresh) || (dy > driftThresh)
+                }()
+
+                // check if iteration cap grew beyond current orbit length
+                let needLengthRefresh = Int(uniforms.maxIt) > Int(uniforms.refCount)
+
+                if needZoomRefresh || needDriftRefresh || needLengthRefresh {
+                    buildReferenceOrbit(c0: curC0, maxIt: Int(uniforms.maxIt))
+                    lastC0 = curC0
+                    lastInvScale = invScale
+                }
+            }
+        }
 
         @inline(__always)
         func split(_ d: Double) -> (Float, Float) {
@@ -746,6 +783,8 @@ final class MandelbrotRenderer: NSObject, MTKViewDelegate {
         let length = orbit.count * MemoryLayout<SIMD4<Float>>.stride
         refOrbitBuffer = device.makeBuffer(bytes: orbit, length: length, options: .storageModeShared)
         refOrbitBuffer?.label = "refOrbitBuffer(float4)"
+        lastC0 = SIMD2<Double>(Double(c0.x), Double(c0.y))
+        lastInvScale = 1.0 / max(1e-15, Double(uniforms.step.x))
         print("[Perturb] orbit len=\(maxIt) c0=\(c0)")
     }
 

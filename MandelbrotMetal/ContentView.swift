@@ -1503,28 +1503,15 @@ struct ContentView: View {
     }
     
     private func autoIterationsForScale(_ scale: Double) -> Int {
-        let base: Int = vm.maxIterations
-
-        // Guard against tiny/NaN baselines in separate steps
-        let baseline: Double = max(1e-9, vm.baselineScale)
-        let ratio: Double = scale / baseline
-        let clampedRatio: Double = max(1.0, ratio)
-        let L: Double = max(0.0, log10(clampedRatio)) // decades beyond baseline
-
-        // Tunables (typed)
-        let startBoost: Double = 250.0
-        let slope: Double      = 900.0   // per 10×
-        let quad: Double       = 350.0   // grows with L^2
-
-        // Split the boost pieces so the type-checker doesn’t expand a giant tree
-        let linearPart: Double = slope * L
-        let quadPart: Double   = quad * (L * L)
-        let rawBoost: Double   = startBoost + linearPart + quadPart
-        let boost: Int         = max(0, Int(rawBoost.rounded()))
-
-        let target: Int = base + boost
-        let capped: Int = min(50_000, max(base, target))
-        return capped
+        // Baseline is the zoom level when the session started or was last reset
+        let mag = max(1.0, scale / max(1e-9, vm.baselineScale))
+        // Tunables:
+        let k: Double = 600.0   // growth per decade
+        let p: Double = 1.25    // curve steepness
+        let bump: Double = 40.0 // gentle bias so small zooms still increase a bit
+        let extra = k * pow(log10(mag), p) + bump
+        let target = Int((Double(vm.maxIterations)) + max(0.0, extra))
+        return min(5_000, max(100, target)) // clamp to your new max
     }
     
     private func liveUpdate(size: CGSize) {
@@ -1595,7 +1582,9 @@ struct ContentView: View {
         vm.baselineScale = 1   // so autoIterations recalibrates from the new start
 
         // Apply to renderer immediately
-        vm.renderer?.setMaxIterations(vm.maxIterations)
+        let it = autoIterations ? autoIterationsForScale(vm.scalePixelsPerUnit) : vm.maxIterations
+        if autoIterations { vm.maxIterations = it }
+        vm.renderer?.setMaxIterations(it)
         vm.renderer?.setInteractive(false, baseIterations: vm.maxIterations)
 
         // Push + draw
