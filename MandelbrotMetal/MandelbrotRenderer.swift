@@ -89,6 +89,18 @@ final class MandelbrotRenderer: NSObject, MTKViewDelegate {
         _pad1: .zero
     )
 
+    // Decide SSAA level based on interaction + HQ idle.
+    private func updateSubpixelSamplesForCurrentMode(isInteracting: Bool? = nil) {
+        let touching = isInteracting ?? false
+        if touching {
+            // While interacting, prioritize speed
+            uniforms.subpixelSamples = 1
+            return
+        }
+        // Idle: if HQ idle is enabled, use 2×2 SSAA; otherwise 1×
+        uniforms.subpixelSamples = highQualityIdle ? 4 : 1
+    }
+
     // MARK: - Lifecycle
     init?(mtkView: MTKView) {
         print("MandelbrotRenderer.init: starting…")
@@ -143,9 +155,11 @@ final class MandelbrotRenderer: NSObject, MTKViewDelegate {
         if on {
             uniforms.maxIt = Int32(max(50, baseIterations / 2))
             refinePending = false
+            updateSubpixelSamplesForCurrentMode(isInteracting: true)
         } else {
             uniforms.maxIt = Int32(max(1, baseIterations))
             refinePending = highQualityIdle
+            updateSubpixelSamplesForCurrentMode(isInteracting: false)
         }
         needsRender = true
         DispatchQueue.main.async { [weak self] in self?.mtkViewRef?.setNeedsDisplay() }
@@ -184,6 +198,7 @@ final class MandelbrotRenderer: NSObject, MTKViewDelegate {
     func setHighQualityIdle(_ on: Bool) {
         highQualityIdle = on
         refinePending = on
+        updateSubpixelSamplesForCurrentMode(isInteracting: false)
         needsRender = true
     }
 
@@ -228,8 +243,8 @@ final class MandelbrotRenderer: NSObject, MTKViewDelegate {
         // Switch to DS mapping only when needed
         uniforms.deepMode = (scalePixelsPerUnit >= deepZoomThreshold) ? 1 : 0
 
-        // Enable 2×2 sub‑pixel SSAA for high zooms to reduce stair‑stepping
-        uniforms.subpixelSamples = (scalePixelsPerUnit >= 5.0e5) ? 4 : 1
+        // Screen path: at idle we honor HQ idle → 2×2 SSAA; during interaction setInteractive(true/false) adjusts it.
+        updateSubpixelSamplesForCurrentMode(isInteracting: false)
 
         // Base mapping
         let halfW = 0.5 * Double(pixelW)
@@ -271,6 +286,8 @@ final class MandelbrotRenderer: NSObject, MTKViewDelegate {
         refinePending = highQualityIdle
         needsRender = true
     }
+    
+    public var ssaaActiveTag: String? { uniforms.subpixelSamples > 1 ? "SSAA×2" : nil }
 
     // MARK: - MTKViewDelegate
     func mtkView(_ view: MTKView, drawableSizeWillChange size: CGSize) {
@@ -316,6 +333,8 @@ final class MandelbrotRenderer: NSObject, MTKViewDelegate {
             let originY = center.y - 0.5 * Double(dh) * invScale
             uniforms.origin = SIMD2<Float>(Float(originX), Float(originY))
             uniforms.step   = SIMD2<Float>(Float(invScale), Float(invScale))
+            // first frame: assume idle, apply HQ idle SSAA if enabled
+            updateSubpixelSamplesForCurrentMode(isInteracting: false)
         }
 
         validateBindingsAndFallback()

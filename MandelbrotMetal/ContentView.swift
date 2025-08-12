@@ -1435,6 +1435,7 @@ struct ContentView: View {
                 .font(compact ? Font.caption2 : Font.caption)
                 .monospaced()
                 .legibleText()
+            vm.renderer?.ssaaActiveTag.map { Text($0).font(.caption2).monospaced().padding(4).background(.ultraThinMaterial, in: Capsule()).overlay(Capsule().strokeBorder(.white.opacity(0.2))) }
         }
         .padding(compact ? 6 : 8)
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
