@@ -1527,6 +1527,10 @@ struct ContentView: View {
 
         // Reset iterations to minimum and restart auto-iter baseline
         vm.maxIterations = 100
+        // Also reset contrast to neutral and rebuild palette/LUT
+        contrast = 1.0
+        applyContrastIfNeeded()
+        persistPaletteSelection()
         isInteracting = false
         vm.baselineScale = 1   // so autoIterations recalibrates from the new start
 
