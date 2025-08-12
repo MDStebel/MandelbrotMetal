@@ -391,6 +391,33 @@ struct ContentView: View {
                                 }
                         }
 
+                        Section(header: Text("Format")) {
+                            Picker("File Type", selection: $exportFormatRaw) {
+                                Text("PNG").tag(ContentView.ExportFormat.png.rawValue)
+                                Text("JPEG").tag(ContentView.ExportFormat.jpeg.rawValue)
+                            }
+                            .pickerStyle(.segmented)
+
+                            if exportFormatRaw == ContentView.ExportFormat.jpeg.rawValue {
+                                HStack(spacing: 12) {
+                                    Text("JPEG Quality")
+                                    Slider(value: $exportJPEGQuality, in: 0.5...1.0, step: 0.05)
+                                    Text("\(Int(exportJPEGQuality * 100))%")
+                                        .font(.caption)
+                                        .monospacedDigit()
+                                        .foregroundStyle(.secondary)
+                                }
+                                .accessibilityLabel("JPEG Quality")
+                            }
+                        }
+
+                        Section(header: Text("Framing")) {
+                            Toggle("Preserve canvas aspect", isOn: $preserveAspect)
+                                .onChange(of: preserveAspect) { _, on in
+                                    if on { applyWidthFromText() }
+                                }
+                        }
+
                         Section {
                             Button {
                                 normalizeCustomSizeFromPreset()
@@ -1191,6 +1218,19 @@ struct ContentView: View {
           (1.00, UIColor.white) ]
     }
 
+    // ——— Export settings & toast ———
+    enum ExportFormat: String { case png, jpeg }
+    @AppStorage("exportFormat") private var exportFormatRaw: String = ExportFormat.png.rawValue
+    @AppStorage("exportJPEGQuality") private var exportJPEGQuality: Double = 0.95
+    @AppStorage("autoSaveToPhotos") private var autoSaveToPhotos: Bool = false
+    @State private var showToast: Bool = false
+    @State private var toastMessage: String = ""
+
+    private var exportFormat: ExportFormat {
+        get { ExportFormat(rawValue: exportFormatRaw) ?? .png }
+        set { exportFormatRaw = newValue.rawValue }
+    }
+
     @ViewBuilder
     private func floatingControls(_ geo: GeometryProxy) -> some View {
         let compact = (hSize == .compact)
@@ -1350,6 +1390,16 @@ struct ContentView: View {
 
                     Spacer(minLength: 8) // push Export group + Info to the right
 
+                    // --- Copy (quick clipboard export of current canvas) ---
+                    Button(action: { copyCanvasToClipboard() }) {
+                        Label("Copy", systemImage: "square.on.square")
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.9)
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.regular)
+                    .disabled(isCapturing)
+
                     // --- Capture (opens a dialog with resolution) ---
                     Button(action: { openCaptureSheet() }) {
                         Label(narrow ? "Capture" : "Capture Image", systemImage: "camera")
@@ -1385,6 +1435,22 @@ struct ContentView: View {
                 if newValue == .custom { showCustomRes = true }
             }
             .disabled(isCapturing)
+            .overlay(
+                Group {
+                    if showToast {
+                        Text(toastMessage)
+                            .font(.caption)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 6)
+                            .background(.ultraThinMaterial, in: Capsule())
+                            .overlay(Capsule().strokeBorder(.white.opacity(0.2)))
+                            .transition(.opacity)
+                            .padding(.top, 6)
+                            .padding(.trailing, 6)
+                            .frame(maxWidth: .infinity, alignment: .topTrailing)
+                    }
+                }
+            )
         }
     }
     
@@ -1427,6 +1493,10 @@ struct ContentView: View {
                 .font(compact ? Font.caption2 : Font.caption)
                 .monospaced()
                 .legibleText()
+            if let tag = vm.renderer?.deepZoomActiveTag {
+                Text(tag).font(.caption2).padding(4)
+                    .background(.ultraThinMaterial, in: Capsule())
+            }
             vm.renderer?.ssaaActiveTag.map { Text($0).font(.caption2).monospaced().padding(4).background(.ultraThinMaterial, in: Capsule()).overlay(Capsule().strokeBorder(.white.opacity(0.2))) }
         }
         .padding(compact ? 6 : 8)
@@ -1762,28 +1832,84 @@ struct ContentView: View {
     }
     
     private func handleSnapshotResult(_ img: UIImage) {
-        print("[UI] handleSnapshotResult: preparing share…")
-        guard let data = img.pngData() else { print("[UI] pngData() failed"); return }
+        print("[UI] handleSnapshotResult: preparing export…")
 
-        let df = DateFormatter()
-        df.dateFormat = "yyyy-MM-dd_HH-mm"
-        let fname = "MandelMetal_\(df.string(from: Date())).png"
+        let fmt = exportFormat
+        let q = max(0.5, min(1.0, exportJPEGQuality))
+        let data: Data?
+        let ext: String
+        switch fmt {
+        case .png:
+            data = img.pngData()
+            ext = "png"
+        case .jpeg:
+            data = img.jpegData(compressionQuality: q)
+            ext = "jpg"
+        }
+
+        guard let outData = data else { print("[UI] image encode failed"); return }
+
+        let df = DateFormatter(); df.dateFormat = "yyyy-MM-dd_HH-mm"
+        let fname = "MandelMetal_\(df.string(from: Date())).\(ext)"
         let url = FileManager.default.temporaryDirectory.appendingPathComponent(fname)
 
         do {
-            // Clear shareItems to avoid reusing a stale array
             shareItems.removeAll()
-            try data.write(to: url, options: .atomic)
+            try outData.write(to: url, options: .atomic)
             snapshotURL = url
             shareItems = [url]
-            // Present share sheet reliably (dismiss then present to avoid a stale controller)
-            showShare = false
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
-                showShare = true
+
+            // Optional auto‑save to Photos
+            if autoSaveToPhotos {
+                PhotoSaver.shared.saveToPhotos(img) { result in
+                    switch result {
+                    case .success:
+                        self.showTransientToast("Saved to Photos ✓")
+                    case .failure:
+                        self.showTransientToast("Couldn’t save to Photos")
+                    }
+                }
             }
+
+            // Present share sheet reliably
+            showShare = false
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { showShare = true }
         } catch {
             print("[UI] failed to write snapshot: \(error)")
+            showTransientToast("Export failed")
         }
+    }
+
+    private func showTransientToast(_ message: String) {
+        toastMessage = message
+        withAnimation(.easeInOut(duration: 0.2)) { showToast = true }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.6) {
+            withAnimation(.easeInOut(duration: 0.2)) { showToast = false }
+        }
+    }
+
+    private func copyCanvasToClipboard() {
+        guard let renderer = vm.renderer else { return }
+        // Commit any in‑flight gestures so we copy what we see
+        let commitSize = vm.mtkView?.bounds.size ?? UIScreen.main.bounds.size
+        commitPendingInteractions(commitSize)
+
+        let ds = vm.mtkView?.drawableSize
+        let w = Int(ds?.width ?? 0), h = Int(ds?.height ?? 0)
+        guard w > 0, h > 0 else { return }
+
+        let it = autoIterations ? autoIterationsForScale(vm.scalePixelsPerUnit) : vm.maxIterations
+        let exportIters = min(2_500, max(100, it))
+
+        // Keep framing identical to canvas
+        let img = renderer.makeSnapshot(
+            width: w,
+            height: h,
+            center: vm.center,
+            scalePixelsPerUnit: vm.scalePixelsPerUnit,
+            iterations: exportIters
+        )
+        if let img { UIPasteboard.general.image = img; showTransientToast("Copied ✓") }
     }
 
     // Helper to open the capture sheet, prefilling custom size with current canvas pixels
@@ -2259,10 +2385,16 @@ private struct CaptureSheet: View {
     @Binding var snapRes: ContentView.SnapshotRes
     @Binding var customW: String
     @Binding var customH: String
+
+    // NEW bindings for format/aspect
+    @Binding var exportFormatRaw: String
+    @Binding var exportJPEGQuality: Double
+    @Binding var preserveAspect: Bool
+
     let onConfirm: () -> Void
     let onClose: () -> Void
     let onCustomTap: () -> Void
-
+    
     var body: some View {
         NavigationStack {
             Form {
@@ -2278,6 +2410,38 @@ private struct CaptureSheet: View {
                         Text(resolutionLabel).foregroundStyle(.secondary)
                     }
                 }
+
+                Section(header: Text("Format")) {
+                    Picker("File Type", selection: $exportFormatRaw) {
+                        Text("PNG").tag(ContentView.ExportFormat.png.rawValue)
+                        Text("JPEG").tag(ContentView.ExportFormat.jpeg.rawValue)
+                    }
+                    .pickerStyle(.segmented)
+
+                    if exportFormatRaw == ContentView.ExportFormat.jpeg.rawValue {
+                        HStack(spacing: 12) {
+                            Text("JPEG Quality")
+                            Slider(value: $exportJPEGQuality, in: 0.5...1.0, step: 0.05)
+                            Text("\(Int(exportJPEGQuality * 100))%")
+                                .font(.caption)
+                                .monospacedDigit()
+                                .foregroundStyle(.secondary)
+                        }
+                        .accessibilityLabel("JPEG Quality")
+                    }
+                }
+                
+                Section(header: Text("Framing")) {
+                    Toggle("Preserve canvas aspect", isOn: $preserveAspect)
+                }
+
+                Section(header: Text("After Capture")) {
+                    Toggle(isOn: Binding(
+                        get: { UserDefaults.standard.bool(forKey: "autoSaveToPhotos") },
+                        set: { UserDefaults.standard.set($0, forKey: "autoSaveToPhotos") }
+                    )) { Label("Auto‑save to Photos", systemImage: "photo") }
+                }
+
                 Section {
                     Button {
                         // Dismiss first to avoid presenting while a sheet is up
@@ -2289,7 +2453,7 @@ private struct CaptureSheet: View {
                         HStack(spacing: 8) {
                             Spacer(minLength: 0)
                             Image(systemName: "camera")
-                            Text("Capture")
+                            Text((UserDefaults.standard.string(forKey: "exportFormat") ?? "png").uppercased() == "JPEG" ? "Capture (JPEG)" : "Capture (PNG)")
                                 .fontWeight(.semibold)
                             Spacer(minLength: 0)
                         }

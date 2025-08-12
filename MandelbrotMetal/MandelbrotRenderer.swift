@@ -14,33 +14,32 @@ extension Notification.Name {
     static let MandelbrotRendererFallback = Notification.Name("MandelbrotRendererFallback")
 }
 
-/// IMPORTANT: This struct must exactly match the struct in `mandelbrot.metal`.
-/// If you change the Metal struct, mirror the same field order, sizes and padding here.
+/// Must match the Metal struct byte-for-byte (order, sizes, padding).
 struct MandelbrotUniforms {
     // Base float mapping
     var origin: SIMD2<Float>
     var step:   SIMD2<Float>
     var maxIt:  Int32
     var size:   SIMD2<UInt32>
-    var pixelStep: Int32
+    var pixelStep: Int32       // reserved
 
     // Quality / color
-    var subpixelSamples: Int32   // 1 or 4
-    var palette: Int32           // 0=HSV, 1=Fire, 2=Ocean, 3=LUT
-    var deepMode: Int32          // 0/1
-    var _pad0: Int32             // keep 16B alignment
+    var subpixelSamples: Int32 // 1 or 4
+    var palette: Int32         // 0=HSV, 1=Fire, 2=Ocean, 3=LUT
+    var deepMode: Int32        // 0/1
+    var _pad0: Int32           // keep 16B alignment
 
-    // Double-single mapping splits
+    // Double-single splits (present even if not used)
     var originHi: SIMD2<Float>
     var originLo: SIMD2<Float>
     var stepHi:   SIMD2<Float>
     var stepLo:   SIMD2<Float>
 
-    // Perturbation (optional)
-    var perturbation: Int32      // 0/1
-    var refCount: Int32          // entries in ref orbit buffer
-    var c0: SIMD2<Float>         // reference c
-    var _pad1: SIMD2<Float>      // keep 16B alignment
+    // Perturbation (present even if not used)
+    var perturbation: Int32    // 0/1
+    var refCount: Int32
+    var c0: SIMD2<Float>
+    var _pad1: SIMD2<Float>    // keep 16B alignment
 }
 
 final class MandelbrotRenderer: NSObject, MTKViewDelegate {
@@ -60,6 +59,8 @@ final class MandelbrotRenderer: NSObject, MTKViewDelegate {
     private var dummyOrbitBuffer: MTLBuffer?
 
     private weak var mtkViewRef: MTKView?
+    
+    public var deepZoomActiveTag: String? { uniforms.deepMode != 0 ? "DEEP" : nil }
 
     // MARK: - State
     var needsRender = true
@@ -382,20 +383,17 @@ final class MandelbrotRenderer: NSObject, MTKViewDelegate {
             enc.setComputePipelineState(pipeline)
 
             var u = uniforms
-            // Bindings must match the kernel signature:
-            // buffer(0): uniforms, buffer(1): refOrbit (optional), tex(0): outTex, tex(1): paletteTex
-            enc.setBytes(&u, length: MemoryLayout<MandelbrotUniforms>.stride, index: 0)
-
-            let orbitForThisPass: MTLBuffer = {
-                if u.perturbation != 0, u.refCount > 0, let buf = refOrbitBuffer {
-                    return buf
-                }
-                return ensureDummyOrbitBuffer()
+            // Select orbit buffer: if perturbation is active and we have an orbit with entries, use it; otherwise a dummy.
+            let orbitBuf: MTLBuffer = {
+                if u.perturbation != 0, u.refCount > 0, let live = self.refOrbitBuffer { return live }
+                return self.ensureDummyOrbitBuffer()
             }()
-            enc.setBuffer(orbitForThisPass, offset: 0, index: 1)
 
+            // buffer(0): uniforms, buffer(1): refOrbit (optional), tex(0): outTex, tex(1): paletteTex (or dummy)
+            enc.setBytes(&u, length: MemoryLayout<MandelbrotUniforms>.stride, index: 0)
+            enc.setBuffer(orbitBuf, offset: 0, index: 1)
             enc.setTexture(outTex, index: 0)
-            enc.setTexture(paletteTexture ?? ensureDummyPaletteTexture(), index: 1)
+            enc.setTexture(self.paletteTexture ?? self.ensureDummyPaletteTexture(), index: 1)
 
             // Uniform threadgroup sizing (simulator-safe)
             let w = pipeline.threadExecutionWidth
@@ -755,17 +753,10 @@ final class MandelbrotRenderer: NSObject, MTKViewDelegate {
 
     private func ensureDummyOrbitBuffer() -> MTLBuffer {
         if let b = dummyOrbitBuffer { return b }
-        // Kernel reads orbit as float4 (16B per element). Make a single zero element.
-        var zero4 = SIMD4<Float>(repeating: 0)
-        let length = MemoryLayout<SIMD4<Float>>.stride
-        guard let buf = device.makeBuffer(bytes: &zero4,
-                                          length: length,
-                                          options: .storageModeShared) else {
-            fatalError("Failed to create dummy orbit buffer")
-        }
-        buf.label = "dummyOrbitBuffer(float4)"
-        dummyOrbitBuffer = buf
-        return buf
+        var zero = SIMD2<Float>(repeating: 0)
+        let b = device.makeBuffer(bytes: &zero, length: MemoryLayout<SIMD2<Float>>.stride, options: .storageModeShared)!
+        dummyOrbitBuffer = b
+        return b
     }
 
     private func buildReferenceOrbit(c0: SIMD2<Double>, maxIt: Int) {
