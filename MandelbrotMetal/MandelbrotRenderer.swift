@@ -551,31 +551,18 @@ final class MandelbrotRenderer: NSObject, MTKViewDelegate {
             return (hi, lo)
         }
 
-        // Build list of tiles in center-out order
+        // Build list of tiles in simple row-major order to avoid gaps/clipping
         var tiles: [(x: Int, y: Int, w: Int, h: Int)] = []
         let cols = (W + tileSize - 1) / tileSize
         let rows = (H + tileSize - 1) / tileSize
-        let cx = cols / 2
-        let cy = rows / 2
-        func tileRect(_ i: Int, _ j: Int) -> (x: Int, y: Int, w: Int, h: Int) {
-            let x0 = i * tileSize
-            let y0 = j * tileSize
-            return (x0, y0, min(tileSize, W - x0), min(tileSize, H - y0))
-        }
-        var ring = 0
-        while tiles.count < cols * rows {
-            let iMin = max(0, cx - ring)
-            let iMax = min(cols - 1, cx + ring)
-            let jMin = max(0, cy - ring)
-            let jMax = min(rows - 1, cy + ring)
-            if jMin < rows { for i in iMin...iMax { tiles.append(tileRect(i, jMin)) } }
-            if iMax < cols && jMin + 1 <= jMax { for j in (jMin + 1)...jMax { tiles.append(tileRect(iMax, j)) } }
-            if jMax < rows && jMax != jMin { for i in stride(from: iMax, through: iMin, by: -1) { tiles.append(tileRect(i, jMax)) } }
-            if iMin < cols && iMax != iMin && jMax - 1 >= jMin + 1 {
-                for j in stride(from: jMax - 1, through: jMin + 1, by: -1) { tiles.append(tileRect(iMin, j)) }
+        for j in 0..<rows {
+            for i in 0..<cols {
+                let x0 = i * tileSize
+                let y0 = j * tileSize
+                let tw = min(tileSize, W - x0)
+                let th = min(tileSize, H - y0)
+                tiles.append((x: x0, y: y0, w: tw, h: th))
             }
-            ring += 1
-            if tiles.count > cols * rows { tiles.removeLast(tiles.count - cols * rows) }
         }
 
         let renderQueue = DispatchQueue(label: "mandel.capture.queue", qos: .userInitiated)
@@ -657,10 +644,12 @@ final class MandelbrotRenderer: NSObject, MTKViewDelegate {
                     cmd.addCompletedHandler { _ in
                         full.withUnsafeMutableBytes { p in
                             guard let base = p.baseAddress else { return }
+                            let dst = base.advanced(by: t.y * rowBytes + t.x * bpp)
                             let region = MTLRegionMake2D(0, 0, t.w, t.h)
-                            tex.getBytes(base.advanced(by: t.y * rowBytes + t.x * bpp),
+                            tex.getBytes(dst,
                                          bytesPerRow: rowBytes,
-                                         from: region, mipmapLevel: 0)
+                                         from: region,
+                                         mipmapLevel: 0)
                         }
                         let pct = Double(index + 1) / Double(tiles.count)
                         DispatchQueue.main.async { progress(pct) }
@@ -677,6 +666,20 @@ final class MandelbrotRenderer: NSObject, MTKViewDelegate {
     }
 
     // MARK: - Helpers / fallback
+
+    // MARK: - Canvas aspect for capture UI
+    /// Returns the current canvas aspect ratio (width / height) based on the last configured drawable size.
+    /// Falls back to the MTKView's drawable if uniforms haven't been seeded yet.
+    public func canvasAspect() -> Double {
+        let w = Int(self.uniforms.size.x)
+        let h = Int(self.uniforms.size.y)
+        if w > 0 && h > 0 { return Double(w) / Double(h) }
+        if let v = mtkViewRef {
+            let ds = v.drawableSize
+            if ds.width > 0 && ds.height > 0 { return Double(ds.width) / Double(ds.height) }
+        }
+        return 16.0 / 9.0
+    }
 
     private func validateBindingsAndFallback() {
         if uniforms.palette == 3 && paletteTexture == nil {

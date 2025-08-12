@@ -174,6 +174,7 @@ struct ContentView: View {
     @State private var showOptionsSheet = false
     @State private var showCaptureSheet = false
     @State private var isCapturing = false
+    @State private var preserveAspect: Bool = true
     struct Bookmark: Codable, Identifiable { var id = UUID(); var name: String; var center: SIMD2<Double>; var scale: Double; var palette: Int; var deep: Bool; var perturb: Bool }
     @State private var bookmarks: [Bookmark] = []
     @State private var showAddBookmark = false
@@ -354,14 +355,72 @@ struct ContentView: View {
                 ShareSheet(items: shareItems)
             }
             .sheet(isPresented: $showCaptureSheet) {
-                CaptureSheet(
-                    snapRes: $snapRes,
-                    customW: $customW,
-                    customH: $customH,
-                    onConfirm: { saveCurrentSnapshot() },
-                    onClose: { showCaptureSheet = false },
-                    onCustomTap: { showCustomRes = true }
-                )
+                NavigationStack {
+                    Form {
+                        Section(header: Text("Resolution")) {
+                            Picker("Preset", selection: $snapRes) {
+                                ForEach(SnapshotRes.allCases) { p in
+                                    Text(p.rawValue).tag(p)
+                                }
+                            }
+                            .onChange(of: snapRes) { _, newValue in
+                                let aspect = canvasAspect
+                                switch newValue {
+                                case .canvas:
+                                    if let ds = vm.mtkView?.drawableSize, ds.width > 0, ds.height > 0 {
+                                        customW = String(Int(ds.width.rounded()))
+                                        let h = preserveAspect ? Int((Double(ds.width)/aspect).rounded()) : Int(ds.height.rounded())
+                                        customH = String(max(1, h))
+                                    }
+                                case .r4k:
+                                    let w = 3840
+                                    let h = preserveAspect ? Int((Double(w)/aspect).rounded()) : 2160
+                                    customW = String(w); customH = String(max(1, h))
+                                case .r6k:
+                                    let w = 5760
+                                    let h = preserveAspect ? Int((Double(w)/aspect).rounded()) : 3240
+                                    customW = String(w); customH = String(max(1, h))
+                                case .r8k:
+                                    let w = 7680
+                                    let h = preserveAspect ? Int((Double(w)/aspect).rounded()) : 4320
+                                    customW = String(w); customH = String(max(1, h))
+                                case .custom:
+                                    break
+                                }
+                            }
+
+                            HStack {
+                                TextField("Width", text: $customW)
+                                    .keyboardType(.numberPad)
+                                    .onChange(of: customW) { _, _ in applyWidthFromText() }
+                                Text("×")
+                                TextField("Height", text: $customH)
+                                    .keyboardType(.numberPad)
+                                    .disabled(preserveAspect)
+                                    .onChange(of: customH) { _, _ in applyHeightFromText() }
+                            }
+
+                            Toggle("Preserve canvas aspect", isOn: $preserveAspect)
+                                .onChange(of: preserveAspect) { _, on in
+                                    if on { applyWidthFromText() }
+                                }
+                        }
+
+                        Section {
+                            Button {
+                                normalizeCustomSizeFromPreset()
+                                saveCurrentSnapshot()
+                                showCaptureSheet = false
+                            } label: {
+                                Text("Capture")
+                            }
+                            .disabled(isCapturing)
+
+                            Button("Cancel", role: .cancel) { showCaptureSheet = false }
+                        }
+                    }
+                    .navigationTitle("Capture Image")
+                }
             }
             .sheet(isPresented: $showCustomRes) {
                 NavigationStack {
@@ -1617,19 +1676,32 @@ struct ContentView: View {
         isCapturing = true
         print("[UI] saveCurrentSnapshot() starting…")
         
-        // Resolve target dimensions from picker
+        // Resolve target dimensions from picker (respect "Preserve canvas aspect")
+        let aspect = canvasAspect
         let dims: (Int, Int)
         switch snapRes {
         case .canvas:
-            dims = (Int(customW) ?? 3840, Int(customH) ?? 2160)
+            let canvasW = Int(vm.mtkView?.drawableSize.width  ?? 3840)
+            let canvasH = Int(vm.mtkView?.drawableSize.height ?? 2160)
+            let w = Int(customW) ?? canvasW
+            let h = preserveAspect ? Int((Double(w)/aspect).rounded()) : (Int(customH) ?? canvasH)
+            dims = (max(16, w), max(16, h))
         case .r4k:
-            dims = (3840, 2160)
+            let w = 3840
+            let h = preserveAspect ? Int((Double(w)/aspect).rounded()) : 2160
+            dims = (w, max(16, h))
         case .r6k:
-            dims = (5760, 3240)
+            let w = 5760
+            let h = preserveAspect ? Int((Double(w)/aspect).rounded()) : 3240
+            dims = (w, max(16, h))
         case .r8k:
-            dims = (7680, 4320)
+            let w = 7680
+            let h = preserveAspect ? Int((Double(w)/aspect).rounded()) : 4320
+            dims = (w, max(16, h))
         case .custom:
-            dims = (Int(customW) ?? 3840, Int(customH) ?? 2160)
+            let w = Int(customW) ?? 3840
+            let h = preserveAspect ? Int((Double(w)/aspect).rounded()) : (Int(customH) ?? 2160)
+            dims = (max(16, w), max(16, h))
         }
         let (w, h) = dims
         
@@ -1640,13 +1712,20 @@ struct ContentView: View {
         // 2) Ensure palette & effective iterations match the view (main thread)
         renderer.setPalette(palette)
         let effectiveIters = autoIterations ? autoIterationsForScale(vm.scalePixelsPerUnit) : vm.maxIterations
-        let exportIters = min(2_500, max(100, effectiveIters)) // clamp to keep capture snappy
-        vm.maxIterations = exportIters
-        renderer.setMaxIterations(exportIters)
-        
+        let exportIters = min(2_500, max(100, effectiveIters))
+        // NOTE: Do not change vm.maxIterations or the renderer's live iterations here.
+        // We pass `exportIters` to the capture routine only, keeping the UI slider unchanged.
+
         // Immutable snapshot of state AFTER the commit
         let snapCenter = vm.center
-        let snapScale  = vm.scalePixelsPerUnit
+        var snapScale  = vm.scalePixelsPerUnit
+        if let ds = vm.mtkView?.drawableSize, ds.width > 0 {
+            // If export width differs from canvas width, adjust pixels-per-unit so FOV is preserved.
+            // Same aspect -> same framing; different aspect -> we still match horizontal FOV.
+            let canvasW = Double(ds.width)
+            let scaleFactor = Double(w) / canvasW
+            snapScale = vm.scalePixelsPerUnit * scaleFactor
+        }
         let t0 = CACurrentMediaTime()
         
         // 3) Start async capture (tiles always; avoids big single allocations)
@@ -1708,6 +1787,65 @@ struct ContentView: View {
         }
         isInteracting = false
         showCaptureSheet = true
+        
+        // Keep height in lockstep with width if preserving aspect
+        if preserveAspect { applyWidthFromText() }
+    }
+    
+    // Canvas aspect (width / height) based on the current drawable; safe fallbacks
+    private var canvasAspect: Double {
+        if let ds = vm.mtkView?.drawableSize, ds.width > 0, ds.height > 0 {
+            return Double(ds.width) / Double(ds.height)
+        }
+        let sz = UIScreen.main.bounds.size
+        return Double(sz.width) / max(1.0, Double(sz.height))
+    }
+
+    // Parse width text and update height when preserving aspect
+    private func applyWidthFromText() {
+        let aspect = canvasAspect
+        let w = max(16, Int(customW) ?? 0)
+        if preserveAspect {
+            let h = Int((Double(w) / aspect).rounded())
+            customH = String(max(16, h))
+        }
+    }
+
+    // Parse height text (used only when preserveAspect == false)
+    private func applyHeightFromText() {
+        _ = max(16, Int(customH) ?? 0)
+    }
+
+    // Ensure customW/customH match the selected preset and toggle
+    private func normalizeCustomSizeFromPreset() {
+        let aspect = canvasAspect
+        switch snapRes {
+        case .canvas:
+            // keep canvas; recompute H from W if preserving aspect
+            if preserveAspect, let w = Int(customW) {
+                customH = String(max(16, Int((Double(w)/aspect).rounded())))
+            }
+        case .r4k:
+            let w = 3840
+            let h = preserveAspect ? Int((Double(w)/aspect).rounded()) : 2160
+            customW = String(w)
+            customH = String(max(16, h))
+        case .r6k:
+            let w = 5760
+            let h = preserveAspect ? Int((Double(w)/aspect).rounded()) : 3240
+            customW = String(w)
+            customH = String(max(16, h))
+        case .r8k:
+            let w = 7680
+            let h = preserveAspect ? Int((Double(w)/aspect).rounded()) : 4320
+            customW = String(w)
+            customH = String(max(16, h))
+        case .custom:
+            // honor current fields; if preserving aspect, recompute H from W
+            if preserveAspect, let w = Int(customW) {
+                customH = String(max(16, Int((Double(w)/aspect).rounded())))
+            }
+        }
     }
 
     private func appCopyright() -> String {
@@ -1913,6 +2051,8 @@ final class PhotoSaver {
         }
     }
 }
+
+
 
 private struct PalettePickerView: View {
     @Environment(\.horizontalSizeClass) private var hSize
