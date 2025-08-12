@@ -67,7 +67,7 @@ final class MandelbrotRenderer: NSObject, MTKViewDelegate {
     private var highQualityIdle = true
 
     // Tunables
-    private let deepZoomThreshold: Double = 1.0e5 // switch to DS mapping here
+    private let deepZoomThreshold: Double = 1.0e4 // switch to DS mapping earlier
 
     private var uniforms = MandelbrotUniforms(
         origin: .zero,
@@ -160,6 +160,19 @@ final class MandelbrotRenderer: NSObject, MTKViewDelegate {
         uniforms.maxIt = Int32(max(1, it))
         refinePending = highQualityIdle
         needsRender = true
+        if uniforms.perturbation != 0 {
+            // Rebuild orbit so its length/values match the new iteration cap
+            let w = Int(uniforms.size.x)
+            let h = Int(uniforms.size.y)
+            if w > 0 && h > 0 {
+                let c0x = Double(uniforms.origin.x) + Double(w) * 0.5 * Double(uniforms.step.x)
+                let c0y = Double(uniforms.origin.y) + Double(h) * 0.5 * Double(uniforms.step.y)
+                buildReferenceOrbit(c0: SIMD2<Double>(c0x, c0y), maxIt: Int(uniforms.maxIt))
+            } else {
+                // If we don't have a valid size yet, clear refCount so the kernel won’t read stale data
+                uniforms.refCount = 0
+            }
+        }
     }
 
     /// Deep Zoom is effectively always on now (DS mapping is enabled by threshold below).
@@ -216,7 +229,7 @@ final class MandelbrotRenderer: NSObject, MTKViewDelegate {
         uniforms.deepMode = (scalePixelsPerUnit >= deepZoomThreshold) ? 1 : 0
 
         // Enable 2×2 sub‑pixel SSAA for high zooms to reduce stair‑stepping
-        uniforms.subpixelSamples = (scalePixelsPerUnit >= 5.0e6) ? 4 : 1
+        uniforms.subpixelSamples = (scalePixelsPerUnit >= 5.0e5) ? 4 : 1
 
         // Base mapping
         let halfW = 0.5 * Double(pixelW)

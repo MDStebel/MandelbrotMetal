@@ -37,6 +37,11 @@ inline float  lerpf(float a, float b, float t) { return a + (b - a) * t; }
 inline float3 lerp3(float3 a, float3 b, float t) { return a + (b - a) * t; }
 inline float  saturate(float x) { return clamp(x, 0.0f, 1.0f); }
 
+inline float shape_t(float t) {
+    // Unified contrast shaping for color normalization
+    return pow(clamp((t - 0.01f) / 0.99f, 0.0f, 1.0f), 0.85f);
+}
+
 // =============================================================
 // Simple palettes + optional LUT
 // =============================================================
@@ -323,8 +328,8 @@ kernel void mandelbrotKernel(
                     float log_zn = 0.5f * log(r2);
                     float nu = log(log_zn / log(2.0f)) / log(2.0f);
                     float mu = (float)it + 1.0f - clamp(nu, 0.0f, 1.0f);
-                    float t = clamp(mu / (float)max(1, u.maxIt), 0.0f, 1.0f);
-                    t = clamp((t - 0.015f) / 0.97f, 0.0f, 1.0f);
+                    float t = clamp(mu / (float)u.maxIt, 0.0f, 1.0f);
+                    t = shape_t(t);
                     acc += pickColor(u.palette, t, paletteTex, samp);
                 }
             }
@@ -344,8 +349,8 @@ kernel void mandelbrotKernel(
                     float log_zn = 0.5f * log(r2);
                     float nu = log(log_zn / log(2.0f)) / log(2.0f);
                     float mu = (float)it + 1.0f - clamp(nu, 0.0f, 1.0f);
-                    float t = clamp(mu / (float)max(1, u.maxIt), 0.0f, 1.0f);
-                    t = clamp((t - 0.015f) / 0.97f, 0.0f, 1.0f);
+                    float t = clamp(mu / (float)u.maxIt, 0.0f, 1.0f);
+                    t = shape_t(t);
                     acc += pickColor(u.palette, t, paletteTex, samp);
                 }
             }

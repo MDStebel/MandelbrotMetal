@@ -180,6 +180,9 @@ struct ContentView: View {
     @State private var newBookmarkName: String = ""
     @State private var fallbackBanner: String? = nil
     @State private var fallbackObserver: NSObjectProtocol? = nil
+    @State private var sizeChangeWork: DispatchWorkItem? = nil
+    @State private var lastPushedPointsSize: CGSize = .zero
+    @State private var contrast: Double = 1.0
 
     enum SnapshotRes: String, CaseIterable, Identifiable {
         case canvas = "Canvas"
@@ -195,6 +198,7 @@ struct ContentView: View {
     @State private var showCustomRes = false
     private let kPaletteNameKey = "palette_name_v1"
     @State private var highQualityIdleRender: Bool = true
+    private let kContrastKey = "contrast_v1"
     @State private var isInteracting: Bool = false
     private let kHQIdleKey = "hq_idle_render_v1"
     
@@ -268,6 +272,12 @@ struct ContentView: View {
                         }
                     }
                 }
+                // Restore contrast if present
+                if UserDefaults.standard.object(forKey: kContrastKey) != nil {
+                    contrast = max(0.5, min(2.0, UserDefaults.standard.double(forKey: kContrastKey)))
+                    // Apply to current palette selection
+                    applyContrastIfNeeded()
+                }
             }
             .onDisappear {
                 if let obs = fallbackObserver {
@@ -276,9 +286,28 @@ struct ContentView: View {
                 }
             }
             .onChange(of: geo.size) { _, newSize in
-                vm.pushViewport(currentPointsSize(newSize), screenScale: currentScreenScale())
+                // Debounce resize notifications and avoid 1px thrash that causes canvas jumps
+                sizeChangeWork?.cancel()
+                let work = DispatchWorkItem { [weak vm] in
+                    guard let vm else { return }
+                    let pts = currentPointsSize(newSize)
+                    // Only push if the points value changed meaningfully (> 0.25pt)
+                    let dx = abs(pts.width  - lastPushedPointsSize.width)
+                    let dy = abs(pts.height - lastPushedPointsSize.height)
+                    if dx > 0.25 || dy > 0.25 {
+                        lastPushedPointsSize = pts
+                        vm.pushViewport(pts, screenScale: currentScreenScale())
+                        vm.requestDraw()
+                    }
+                }
+                sizeChangeWork = work
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.12, execute: work)
             }
-            .onChange(of: palette) { persistPaletteSelection() }
+            .onChange(of: palette) { _, newValue in
+                persistPaletteSelection()
+                vm.renderer?.setPalette(newValue)
+                vm.requestDraw()
+            }
             .onChange(of: highQualityIdleRender) { newValue in
                 UserDefaults.standard.set(newValue, forKey: kHQIdleKey)
                 vm.renderer?.setHighQualityIdle(newValue)
@@ -292,7 +321,16 @@ struct ContentView: View {
                 vm.renderer?.setInteractive(interactiveNow, baseIterations: vm.maxIterations)
                 vm.requestDraw()
             }
-            .onChange(of: currentPaletteName) { _ in persistPaletteSelection() }
+            .onChange(of: currentPaletteName) { _, newName in
+                if let opt = paletteOptions.first(where: { $0.name == newName }) {
+                    applyPaletteOption(opt)
+                }
+                persistPaletteSelection()
+            }
+            .onChange(of: contrast) { _ in
+                UserDefaults.standard.set(contrast, forKey: kContrastKey)
+                applyContrastIfNeeded()
+            }
             .onChange(of: vm.center)               { vm.saveState(perturb: false, deep: true, palette: palette) }
             .onChange(of: vm.scalePixelsPerUnit)   { vm.saveState(perturb: false, deep: true, palette: palette) }
             .onChange(of: vm.maxIterations)        { vm.saveState(perturb: false, deep: true, palette: palette) }
@@ -539,33 +577,179 @@ struct ContentView: View {
 
     private func applyPaletteOption(_ opt: PaletteOption) {
         currentPaletteName = opt.name
-        if let idx = opt.builtInIndex {
+        // If contrast is neutral and this is a built-in, use the fast built-in mode.
+        if let idx = opt.builtInIndex, abs(contrast - 1.0) < 0.01 {
             palette = idx
             vm.renderer?.setPalette(idx)
-        } else {
-            if let img = makeLUTImage(stops: opt.stops) {
-                vm.renderer?.setPaletteImage(img)
-                vm.renderer?.setPalette(3) // LUT slot
-                palette = 3
-            }
+            vm.requestDraw()
+            return
+        }
+        // Otherwise build a LUT (either custom palette or to honor non-1.0 contrast)
+        if let img = makeContrastLUTImage(stops: opt.stops, width: 512, contrast: contrast) {
+            vm.renderer?.setPaletteImage(img)
+            vm.renderer?.setPalette(3)
+            palette = 3
         }
         vm.requestDraw()
     }
 
+    // Build a 1×W LUT image from gradient stops
     private func makeLUTImage(stops: [(CGFloat, UIColor)], width: Int = 256) -> UIImage? {
         let w = max(2, width)
         let h = 1
         let cs = CGColorSpaceCreateDeviceRGB()
         let bitsPerComp = 8
         let rowBytes = w * 4
-        guard let ctx = CGContext(data: nil, width: w, height: h, bitsPerComponent: bitsPerComp, bytesPerRow: rowBytes, space: cs, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
-        let cgStops = stops.map { (loc, ui) in (loc, ui.cgColor) }
-        let locations = cgStops.map { $0.0 }
+        guard let ctx = CGContext(
+            data: nil,
+            width: w,
+            height: h,
+            bitsPerComponent: bitsPerComp,
+            bytesPerRow: rowBytes,
+            space: cs,
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ) else { return nil }
+
+        let cgStops: [(CGFloat, CGColor)] = stops.map { ($0.0, $0.1.cgColor) }
+        let locations: [CGFloat] = cgStops.map { $0.0 }
         let colors = cgStops.map { $0.1 } as CFArray
+
         guard let grad = CGGradient(colorsSpace: cs, colors: colors, locations: locations) else { return nil }
         ctx.drawLinearGradient(grad, start: CGPoint(x: 0, y: 0), end: CGPoint(x: w, y: 0), options: [])
+
         guard let cg = ctx.makeImage() else { return nil }
         return UIImage(cgImage: cg)
+    }
+
+    // Convert sRGB (0...1) to HSV (h in 0...1, s/v in 0...1)
+    private func rgbToHSV(r: Double, g: Double, b: Double) -> (h: Double, s: Double, v: Double) {
+        let cmax = max(r, max(g, b))
+        let cmin = min(r, min(g, b))
+        let delta = cmax - cmin
+
+        var h: Double = 0.0
+        if delta > 1e-12 {
+            if cmax == r {
+                h = ((g - b) / delta).truncatingRemainder(dividingBy: 6.0)
+            } else if cmax == g {
+                h = ((b - r) / delta) + 2.0
+            } else {
+                h = ((r - g) / delta) + 4.0
+            }
+            h /= 6.0
+            if h < 0 { h += 1.0 }
+        }
+        let s = cmax == 0 ? 0 : (delta / cmax)
+        let v = cmax
+        return (h, s, v)
+    }
+
+    // Convert HSV (h in 0...1, s/v in 0...1) to sRGB (0...1)
+    private func hsvToRGB(h: Double, s: Double, v: Double) -> (r: Double, g: Double, b: Double) {
+        if s <= 1e-12 { return (v, v, v) }
+        let hh = (h - floor(h)) * 6.0
+        let i = Int(hh)
+        let f = hh - Double(i)
+        let p = v * (1.0 - s)
+        let q = v * (1.0 - s * f)
+        let t = v * (1.0 - s * (1.0 - f))
+        switch i {
+        case 0: return (v, t, p)
+        case 1: return (q, v, p)
+        case 2: return (p, v, t)
+        case 3: return (p, q, v)
+        case 4: return (t, p, v)
+        default: return (v, p, q)
+        }
+    }
+
+    // Contrast in HSV: adjust V (and gently S) per pixel so hue is preserved
+    private func makeContrastLUTImage(stops: [(CGFloat, UIColor)], width: Int = 256, contrast: Double) -> UIImage? {
+        // 1) Build a linear LUT image from the provided stops
+        guard let base = makeLUTImage(stops: stops, width: width), let cg = base.cgImage else { return nil }
+        let w = cg.width
+        let h = 1
+
+        // 2) Read source pixels (premultipliedLast from makeLUTImage)
+        guard let provider = cg.dataProvider, let cfData = provider.data else { return base }
+        let srcLen = CFDataGetLength(cfData)
+        guard srcLen >= w * 4 else { return base }
+        let srcPtr = CFDataGetBytePtr(cfData)!
+
+        // 3) Allocate destination buffer
+        var dst = Data(count: w * 4)
+        let mid: Double = 0.5
+        // Map UI contrast range (0.5...2.0) to sensible gamma and saturation scaling
+        let gamma: Double = max(0.25, min(4.0, 1.0 / contrast)) // <1 = higher contrast, >1 = softer
+        let satScale: Double = pow(contrast, 0.35)               // gentle saturation lift with contrast
+
+        dst.withUnsafeMutableBytes { (dstRaw: UnsafeMutableRawBufferPointer) in
+            let dstPtr = dstRaw.bindMemory(to: UInt8.self).baseAddress!
+            for x in 0 ..< w {
+                let i = x * 4
+                // sRGB bytes
+                let a = Double(srcPtr[i + 3]) / 255.0
+                let r = Double(srcPtr[i + 0]) / 255.0
+                let g = Double(srcPtr[i + 1]) / 255.0
+                let b = Double(srcPtr[i + 2]) / 255.0
+
+                // Convert to HSV, adjust V and S (preserve hue)
+                var (hue, sat, val) = rgbToHSV(r: r, g: g, b: b)
+                // Remap value around mid using gamma. Using pow on V preserves hues and avoids band shifts.
+                let vAdj = pow(val, gamma)
+                // Light saturation shaping to keep vivid palettes punchy as contrast rises
+                let sAdj = min(1.0, max(0.0, sat * satScale))
+
+                let (rr, gg, bb) = hsvToRGB(h: hue, s: sAdj, v: vAdj)
+
+                // Write as BGRA premultipliedFirst (for MTLPixelFormat.bgra8Unorm)
+                dstPtr[i + 0] = UInt8(max(0.0, min(1.0, bb)) * 255.0) // B
+                dstPtr[i + 1] = UInt8(max(0.0, min(1.0, gg)) * 255.0) // G
+                dstPtr[i + 2] = UInt8(max(0.0, min(1.0, rr)) * 255.0) // R
+                dstPtr[i + 3] = UInt8(max(0.0, min(1.0, a )) * 255.0) // A
+            }
+        }
+
+        // 4) Create CGImage from adjusted buffer
+        let cs = CGColorSpaceCreateDeviceRGB()
+        guard let newProvider = CGDataProvider(data: dst as CFData) else { return base }
+        guard let out = CGImage(
+            width: w,
+            height: h,
+            bitsPerComponent: 8,
+            bitsPerPixel: 32,
+            bytesPerRow: w * 4,
+            space: cs,
+            bitmapInfo: CGBitmapInfo.byteOrder32Little.union(
+                CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedFirst.rawValue)
+            ),
+            provider: newProvider,
+            decode: nil,
+            shouldInterpolate: false,
+            intent: .defaultIntent
+        ) else { return base }
+        return UIImage(cgImage: out)
+    }
+
+    // If contrast is neutral and a built‑in palette is selected, use fast GPU palette.
+    // Otherwise, build a LUT (either custom palette or to honor the non‑1.0 contrast).
+    private func applyContrastIfNeeded() {
+        if abs(contrast - 1.0) < 0.01 {
+            if let opt = paletteOptions.first(where: { $0.name == currentPaletteName }),
+               let idx = opt.builtInIndex {
+                palette = idx
+                vm.renderer?.setPalette(idx)
+                vm.requestDraw()
+                return
+            }
+        }
+        guard let opt = paletteOptions.first(where: { $0.name == currentPaletteName }) else { return }
+        if let img = makeContrastLUTImage(stops: opt.stops, width: 512, contrast: contrast) {
+            vm.renderer?.setPaletteImage(img)
+            vm.renderer?.setPalette(3) // LUT slot
+            palette = 3
+            vm.requestDraw()
+        }
     }
 
     // Palette stop generators
@@ -1084,6 +1268,22 @@ struct ContentView: View {
                     }
                     .onChange(of: gradientItem) { _, item in importGradientItem(item) }
 
+                    // Contrast
+                    HStack(spacing: 8) {
+                        Text("Contrast")
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.85)
+                        Slider(value: Binding(
+                            get: { contrast },
+                            set: { contrast = max(0.5, min(2.0, $0)) }
+                        ), in: 0.5...2.0, step: 0.05)
+                            .frame(width: 160)
+                        Text(String(format: "%.2f×", contrast))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .monospacedDigit()
+                    }
+
                     // Bookmarks
                     Menu("Bookmarks") {
                         Button("Add Current…") { newBookmarkName = ""; showAddBookmark = true }
@@ -1357,6 +1557,8 @@ struct ContentView: View {
                 vm.renderer?.setPaletteImage(img)
                 vm.renderer?.setPalette(3)
                 vm.requestDraw()
+                currentPaletteName = "Custom LUT"
+                persistPaletteSelection()
             }
         }
     }
@@ -1615,7 +1817,7 @@ private struct HelpView: View {
                     .foregroundStyle(.primary)
 
                 sectionHeader("Color & Palettes")
-                Text("Choose **HSV**, **Fire**, or **Ocean** palettes. Import a custom gradient (LUT) via **Import Gradient**.")
+                Text("Choose **HSV**, **Fire**, or **Ocean** palettes, or import a custom gradient (LUT). Use the **Contrast** slider to increase or reduce contrast; non‑neutral values generate a custom LUT so you can tweak any palette.")
                     .foregroundStyle(.primary)
 
                 sectionHeader("Iterations")
