@@ -2075,48 +2075,63 @@ private struct HelpView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: compact ? 14 : 18) {
-                sectionHeader("Getting Started")
-                Text("Pinch to zoom, drag to pan. Double-tap to zoom in at the tap point. Deep Zoom engages automatically at extreme magnifications to reduce precision artifacts.")
+                // Title
+                Text("Help & Tips")
+                    .font(compact ? .title2.bold() : .largeTitle.bold())
+                    .padding(.bottom, compact ? 4 : 8)
+
+                // --- Navigation ---
+                sectionHeader("Navigation")
+                bullet("Pinch to zoom", "magnifyingglass")
+                bullet("Drag to pan the canvas", "hand.draw")
+                bullet("Double‑tap to zoom at tap point", "plus.magnifyingglass")
+                Text("Reset returns to the default view and also resets **Iterations** and **Contrast**.")
                     .fixedSize(horizontal: false, vertical: true)
-                    .foregroundStyle(.primary)
 
-                sectionHeader("Navigation & Gestures")
-                bullet("Magnify — pinch to zoom in/out", "magnifyingglass")
-                bullet("Pan", "hand.draw")
-                bullet("Zoom at point (×2)", "touchid")
+                // --- Quality Modes ---
+                sectionHeader("Quality Modes")
+                Text("**HQ Idle** – When you stop interacting, the renderer runs a high‑quality refinement pass (higher iterations and anti‑aliasing). This yields a sharper image at the cost of extra GPU/battery.")
+                    .fixedSize(horizontal: false, vertical: true)
+                Text("**SSAA ×2** – Super‑Sampling Anti‑Aliasing renders at 2× resolution and downsamples for smoother edges. A “SSAA×2” tag appears in the HUD when active.")
+                    .fixedSize(horizontal: false, vertical: true)
+                Text("**Deep Zoom** – Extended‑precision mapping engages automatically at extreme magnifications (≈ 10⁷× and beyond) to reduce precision artifacts. There’s no switch to manage.")
+                    .fixedSize(horizontal: false, vertical: true)
 
-                sectionHeader("Rendering Modes")
-                Text("**Deep Zoom** switches the kernel into higher‑precision math (double‑single) for extreme magnifications to mitigate precision artifacts.")
-                    .foregroundStyle(.primary)
+                // --- Color & Contrast ---
+                sectionHeader("Color & Contrast")
+                Text("Choose a built‑in palette (HSV, Fire, Ocean, and many more) or import a gradient image to create a custom palette (LUT). The **Contrast** slider increases or softens tonal separation while preserving palette hue.")
+                    .fixedSize(horizontal: false, vertical: true)
 
-                sectionHeader("Quality")
-                Text("**High‑Quality while idle** renders a sharper preview whenever you’re not touching the screen. It increases precision and may temporarily raise iterations in the background to refine details. This looks better at deep zooms but can use a bit more battery.")
-                    .foregroundStyle(.primary)
-
-                sectionHeader("Color & Palettes")
-                Text("Choose **HSV**, **Fire**, or **Ocean** palettes, or import a custom gradient (LUT). Use the **Contrast** slider to increase or reduce contrast; non‑neutral values generate a custom LUT so you can tweak any palette.")
-                    .foregroundStyle(.primary)
-
+                // --- Iterations ---
                 sectionHeader("Iterations")
-                Text("Use the **Iterations** stepper to adjust detail. Turn on **Auto Iter** to increase iterations automatically with zoom (about **+400 per 10×** beyond your starting zoom).")
-                    .foregroundStyle(.primary)
+                Text("Use the **Iterations** slider or stepper to control detail. Enable **Auto Iter** to grow iterations with zoom. The growth curve is tuned for responsiveness while exploring, with a high‑quality pass when idle (if HQ Idle is enabled).")
+                    .fixedSize(horizontal: false, vertical: true)
 
-                sectionHeader("Snapshots & Export")
-                Text("Use **Resolution → Save** for 4K/6K/8K. Larger sizes use tiled export to avoid memory spikes. Files are named \"MandelMetal_yyyy‑mm‑dd_HH‑mm.png\" and can be shared from the sheet.")
-                    .foregroundStyle(.primary)
-
+                // --- Bookmarks ---
                 sectionHeader("Bookmarks")
-                Text("Save the current view (center, zoom, palette, modes) and recall it from **Bookmarks**.")
-                    .foregroundStyle(.primary)
+                Text("Save favorite views and return to them later. A bookmark stores center, zoom, and palette.")
+                    .fixedSize(horizontal: false, vertical: true)
 
+                // --- Capture & Export ---
+                sectionHeader("Capture & Export")
+                Text("Open **Capture Image** to export at Canvas/4K/6K/8K or a custom size. **Preserve canvas aspect** keeps the saved image proportional to what you see. Choose **PNG** for maximum quality or **JPEG** (with adjustable quality) for smaller files. You can also **Copy** the current canvas to the clipboard.")
+                    .fixedSize(horizontal: false, vertical: true)
+
+                // --- HUD Indicators ---
+                sectionHeader("HUD Indicators")
+                bullet("“Deep Zoom” appears when extended‑precision math is active", "scope")
+                bullet("“SSAA×2” appears when 2× super‑sampling is active", "sparkles")
+
+                // --- Performance Tips ---
                 sectionHeader("Performance Tips")
-                bullet("Start simple", "speedometer", suffix: "Explore with moderate iterations; export high‑res later.")
-                bullet("Prefer 6K over 8K on older devices", "rectangle.on.rectangle")
+                bullet("Explore first, export later", "speedometer", suffix: "Keep iterations moderate while navigating; let HQ Idle refine, and export high‑res when you’re happy with the framing.")
+                bullet("Device limits", "cpu", suffix: "6K exports are faster and lighter than 8K on older devices.")
 
+                // --- Troubleshooting ---
                 sectionHeader("Troubleshooting")
-                bullet("Black screen", "exclamationmark.triangle", suffix: "Ensure iterations aren’t extremely high; try Reset.")
-                bullet("Stale color after import", "paintpalette", suffix: "After importing a gradient, ensure the LUT option is active if available.")
-                bullet("Blur at extreme zoom", "scope", suffix: "Enable Deep Zoom.")
+                bullet("Black screen", "exclamationmark.triangle", suffix: "Iterations may be too high for your zoom; tap **Reset**.")
+                bullet("Colors look off after import", "paintpalette", suffix: "Re‑select the palette or set **Contrast** back to 1.0×.")
+                bullet("Capture looks stretched", "rectangle.on.rectangle", suffix: "Enable **Preserve canvas aspect** in Capture.")
 
                 Divider().padding(.vertical, 4)
                 Text(appMeta())
@@ -2140,7 +2155,11 @@ private struct HelpView: View {
     @ViewBuilder private func bullet(_ title: String, _ symbol: String, suffix: String? = nil) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 10) {
             Image(systemName: symbol).frame(width: 18)
-            if let suffix { Text("**\(title)** — \(suffix)") } else { Text("**\(title)**") }
+            if let suffix {
+                Text("**\(title)** — \(suffix)")
+            } else {
+                Text("**\(title)**")
+            }
         }
         .font(compact ? .caption : .body)
     }
