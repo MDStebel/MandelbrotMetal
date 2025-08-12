@@ -106,7 +106,7 @@ struct MetalFractalView: UIViewRepresentable {
         view.isPaused = false
         view.enableSetNeedsDisplay = false // continuous redraw
         view.preferredFramesPerSecond = 60
-        view.autoResizeDrawable = false
+        view.autoResizeDrawable = true
 
         guard let renderer = MandelbrotRenderer(mtkView: view) else { return view }
         vm.attachRenderer(renderer)
@@ -128,27 +128,12 @@ struct MetalFractalView: UIViewRepresentable {
 
         return view
     }
-    
+
     @MainActor
     func updateUIView(_ uiView: MTKView, context: Context) {
-        let nominalScale = uiView.window?.screen.scale ?? UIScreen.main.scale
-        let sizePts = uiView.bounds.size
-        // Floor to whole pixels so it doesn’t bounce between adjacent sizes
-        let sizePx = CGSize(
-            width: floor(max(1, sizePts.width  * nominalScale)),
-            height: floor(max(1, sizePts.height * nominalScale))
-        )
-        uiView.drawableSize = sizePx
-
-        // Use the ACTUAL pixels-per-point used by MTKView (prevents 1px jumps)
-        let scaleUsed: CGFloat
-        if sizePts.width > 0 {
-            scaleUsed = sizePx.width / sizePts.width
-        } else {
-            scaleUsed = nominalScale
-        }
-
-        vm.pushViewport(sizePts, screenScale: scaleUsed)
+        // Let MTKView manage its drawable size (autoResizeDrawable = true)
+        let scale = uiView.window?.screen.scale ?? UIScreen.main.scale
+        vm.pushViewport(uiView.bounds.size, screenScale: scale)
         vm.requestDraw()
     }
 }
@@ -542,6 +527,13 @@ struct ContentView: View {
             .contentShape(Rectangle())
             .gesture(panAndZoom(geo.size))     // pan + pinch
             .highPriorityGesture(doubleTap)    // ×2 zoom at tap point
+            .onChange(of: geo.size) { _, newSize in
+                onCanvasSizeChanged(newSize)
+            }
+            .onReceive(NotificationCenter.default.publisher(for: UIDevice.orientationDidChangeNotification)) { _ in
+                vm.pushViewport(currentPointsSize(geo.size), screenScale: currentScreenScale())
+                vm.requestDraw()
+            }
     }
 
     // Helper to provide compact/regular palette labels with accessibility support
@@ -1459,22 +1451,30 @@ struct ContentView: View {
         let pinch = MagnificationGesture()
             .onChanged { value in
                 isInteracting = true
+                vm.renderer?.setInteractive(true, baseIterations: effectiveIterations)
+                vm.mtkView?.preferredFramesPerSecond = 30
                 pendingScale = value
                 liveUpdate(size: size)
             }
             .onEnded { value in
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.10) { isInteracting = false }
+                vm.renderer?.setInteractive(false, baseIterations: effectiveIterations)
+                vm.mtkView?.preferredFramesPerSecond = 60
                 applyPinch(value, size: size)
             }
         
         let drag = DragGesture(minimumDistance: 0)
             .onChanged { value in
                 isInteracting = true
+                vm.renderer?.setInteractive(true, baseIterations: effectiveIterations)
+                vm.mtkView?.preferredFramesPerSecond = 30
                 pendingCenter = dragToComplex(value.translation)
                 liveUpdate(size: size)
             }
             .onEnded { value in
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.10) { isInteracting = false }
+                vm.renderer?.setInteractive(false, baseIterations: effectiveIterations)
+                vm.mtkView?.preferredFramesPerSecond = 60
                 applyDrag(value, size: size)
             }
         
@@ -1527,6 +1527,25 @@ struct ContentView: View {
                                  sizePts: currentPointsSize(size),
                                  screenScale: currentScreenScale(),
                                  maxIterations: it)
+        vm.requestDraw()
+    }
+
+    // Called when the device rotates or the available canvas size changes.
+    // Ensures the renderer gets the new size and triggers a fresh render.
+    private func onCanvasSizeChanged(_ size: CGSize) {
+        // Recompute effective iterations if auto is enabled
+        let it = autoIterations ? autoIterationsForScale(vm.scalePixelsPerUnit) : vm.maxIterations
+
+        // Push the updated viewport (same center/scale, new size)
+        vm.renderer?.setViewport(
+            center: vm.center,
+            scalePixelsPerUnit: vm.scalePixelsPerUnit,
+            sizePts: currentPointsSize(size),
+            screenScale: currentScreenScale(),
+            maxIterations: it
+        )
+
+        // Ask Metal view to redraw
         vm.requestDraw()
     }
     
