@@ -21,17 +21,15 @@ struct MandelbrotUniforms {
     var maxIt: Int32
     var size: SIMD2<UInt32>
     var pixelStep: Int32
+    var subpixelSamples: Int32   // NEW: 1 or 4
     var palette: Int32
     var deepMode: Int32
+    var _pad0: Int32
     var originHi: SIMD2<Float>
     var originLo: SIMD2<Float>
     var stepHi: SIMD2<Float>
     var stepLo: SIMD2<Float>
-    var perturbation: Int32
-    var c0: SIMD2<Float>
-    var subpixelSamples: Int32
 }
-
 final class MandelbrotRenderer: NSObject, MTKViewDelegate {
 
     // MARK: - Metal objects
@@ -57,40 +55,36 @@ final class MandelbrotRenderer: NSObject, MTKViewDelegate {
         maxIt: 500,
         size: .zero,
         pixelStep: 1,
+        subpixelSamples: 1,   // NEW default
         palette: 0,
-        deepMode: 1,
+        deepMode: 0,
+        _pad0: 0,
         originHi: .zero,
         originLo: .zero,
         stepHi: .zero,
-        stepLo: .zero,
-        perturbation: 0,
-        c0: .zero,
-        subpixelSamples: 1
+        stepLo: .zero
     )
 
     // Enable deep precision sooner to reduce blockiness
-    private let deepZoomThreshold: Double = 1.0e4
+    private let deepZoomThreshold: Double = 1.0e5
 
     // MARK: - Public knobs (called from UI)
     /// Toggle between interactive (fast) and idle (refined) rendering, and trigger a render immediately.
     func setInteractive(_ on: Bool, baseIterations: Int) {
-        // Always render at full pixel resolution; vary quality via iterations and sub‑pixel samples.
+        // Always render at full pixel resolution; vary quality via iterations only.
         uniforms.pixelStep = 1
 
         if on {
-            // FAST path while user is touching: fewer iterations, single sample, no refine queued
+            // FAST path while user is touching: fewer iterations
             uniforms.maxIt = Int32(max(50, baseIterations / 2))
-            uniforms.subpixelSamples = 1
             refinePending = false
         } else {
-            // IDLE path: restore iterations target; queue a refine pass if enabled
+            // IDLE path: restore iterations target; optionally queue a refine pass
             uniforms.maxIt = Int32(max(1, baseIterations))
-            uniforms.subpixelSamples = 1   // first pass
-            refinePending = highQualityIdle // schedule 4× pass after this frame
+            refinePending = highQualityIdle
         }
 
         needsRender = true
-        // Ensure MTKView wakes up to draw the pass immediately
         DispatchQueue.main.async { [weak self] in self?.mtkViewRef?.setNeedsDisplay() }
     }
 
@@ -101,7 +95,6 @@ final class MandelbrotRenderer: NSObject, MTKViewDelegate {
 
     func setMaxIterations(_ it: Int) {
         uniforms.maxIt = Int32(max(1, it))
-        uniforms.subpixelSamples = 1
         refinePending = highQualityIdle
         needsRender = true
     }
@@ -114,15 +107,7 @@ final class MandelbrotRenderer: NSObject, MTKViewDelegate {
 
     func setHighQualityIdle(_ on: Bool) {
         highQualityIdle = on
-        if on {
-            // schedule a refine on next frame
-            uniforms.subpixelSamples = 1
-            refinePending = true
-        } else {
-            // stick to single-sample; cancel any queued refine
-            uniforms.subpixelSamples = 1
-            refinePending = false
-        }
+        refinePending = on
         needsRender = true
     }
 
@@ -208,37 +193,42 @@ final class MandelbrotRenderer: NSObject, MTKViewDelegate {
         uniforms.maxIt = Int32(max(1, maxIterations))
         uniforms.pixelStep = 1
 
-        let invScale = 1.0 / max(1e-9, scalePixelsPerUnit)
+        let invScale = 1.0 / max(1e-12, scalePixelsPerUnit)
 
-        // Always enable double-single mapping & iteration to avoid blockiness at any zoom.
-        uniforms.deepMode = 1
+        // Turn on DS mapping only when needed (or force to 1 to always use it)
+        uniforms.deepMode = (scalePixelsPerUnit >= deepZoomThreshold) ? 1 : 0
 
-        // Origin/step in float (legacy)
+        // Turn on 2x2 subpixel SS at very deep zooms to reduce stair‑stepping
+        uniforms.subpixelSamples = (scalePixelsPerUnit >= 5.0e6) ? 4 : 1
+        
         let halfW = 0.5 * Double(pixelW)
         let halfH = 0.5 * Double(pixelH)
         let originX = center.x - halfW * invScale
         let originY = center.y - halfH * invScale
-        uniforms.origin = SIMD2<Float>(Float(originX), Float(originY))
-        uniforms.step   = SIMD2<Float>(Float(invScale), Float(invScale))
 
-        // Hi/Lo splits for DS mapping in the kernel
+        // Base float mapping
+        uniforms.origin = .init(Float(originX), Float(originY))
+        uniforms.step   = .init(Float(invScale), Float(invScale))
+
+        @inline(__always)
         func split(_ d: Double) -> (Float, Float) {
             let hi = Float(d)
             let lo = Float(d - Double(hi))
             return (hi, lo)
         }
-        let (oRx, oRxLo) = split(originX)
-        let (oRy, oRyLo) = split(originY)
-        let (sX,  sXLo)  = split(invScale)
-        let (sY,  sYLo)  = split(invScale)
 
-        uniforms.originHi = SIMD2<Float>(oRx, oRy)
-        uniforms.originLo = SIMD2<Float>(oRxLo, oRyLo)
-        uniforms.stepHi   = SIMD2<Float>(sX,  sY)
-        uniforms.stepLo   = SIMD2<Float>(sXLo, sYLo)
+        // Hi/Lo splits for double‑single mapping
+        let (oHx, oLx) = split(originX)
+        let (oHy, oLy) = split(originY)
+        let (sHx, sLx) = split(invScale)
+        let (sHy, sLy) = split(invScale)
+
+        uniforms.originHi = .init(oHx, oHy)
+        uniforms.originLo = .init(oLx, oLy)
+        uniforms.stepHi   = .init(sHx, sHy)
+        uniforms.stepLo   = .init(sLx, sLy)
 
         allocateTextureIfNeeded(width: pixelW, height: pixelH)
-        uniforms.subpixelSamples = 1
         refinePending = highQualityIdle
         needsRender = true
     }
@@ -310,14 +300,14 @@ final class MandelbrotRenderer: NSObject, MTKViewDelegate {
             let w = pipeline.threadExecutionWidth
             let h = max(1, pipeline.maxTotalThreadsPerThreadgroup / w)
             let tg = MTLSize(width: w, height: h, depth: 1)
-
-            let gridW = Int(uniforms.size.x)
-            let gridH = Int(uniforms.size.y)
+            
+            let gridW = Int(uniforms.size.x), gridH = Int(uniforms.size.y)
             let groups = MTLSize(
                 width:  (gridW + tg.width  - 1) / tg.width,
                 height: (gridH + tg.height - 1) / tg.height,
                 depth:  1
             )
+
             enc.dispatchThreadgroups(groups, threadsPerThreadgroup: tg)
             enc.endEncoding()
         }
@@ -339,7 +329,6 @@ final class MandelbrotRenderer: NSObject, MTKViewDelegate {
         cmd.addCompletedHandler { [weak self] _ in
             guard let self else { return }
             if self.highQualityIdle && self.refinePending {
-                self.uniforms.subpixelSamples = 4
                 self.needsRender = true
                 self.refinePending = false
                 DispatchQueue.main.async { self.mtkViewRef?.setNeedsDisplay() }
