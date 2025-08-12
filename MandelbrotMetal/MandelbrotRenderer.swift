@@ -183,6 +183,9 @@ final class MandelbrotRenderer: NSObject, MTKViewDelegate {
             let c0x = Double(uniforms.origin.x) + Double(w) * 0.5 * Double(uniforms.step.x)
             let c0y = Double(uniforms.origin.y) + Double(h) * 0.5 * Double(uniforms.step.y)
             buildReferenceOrbit(c0: SIMD2<Double>(c0x, c0y), maxIt: Int(uniforms.maxIt))
+        } else {
+            // Ensure kernel won't try to read an orbit
+            uniforms.refCount = 0
         }
         needsRender = true
     }
@@ -248,6 +251,9 @@ final class MandelbrotRenderer: NSObject, MTKViewDelegate {
                 buildReferenceOrbit(c0: SIMD2<Double>(c0x, c0y), maxIt: Int(uniforms.maxIt))
             }
         }
+        else {
+            uniforms.refCount = 0
+        }
 
         allocateTextureIfNeeded(width: pixelW, height: pixelH)
         refinePending = highQualityIdle
@@ -301,17 +307,24 @@ final class MandelbrotRenderer: NSObject, MTKViewDelegate {
         }
 
         validateBindingsAndFallback()
+        if uniforms.perturbation == 0 { uniforms.refCount = 0 }
 
         // Encode compute kernel
         if let enc = cmd.makeComputeCommandEncoder() {
             enc.setComputePipelineState(pipeline)
 
             var u = uniforms
-            // Bindings must match the kernel signature:
-            // buffer(0): uniforms, buffer(1): refOrbit (optional), tex(0): outTex, tex(1): paletteTex
+            // Always bind dummy buffers first; overwrite if we have real data.
             enc.setBytes(&u, length: MemoryLayout<MandelbrotUniforms>.stride, index: 0)
-            let orbitBuf = (u.perturbation != 0 && u.refCount > 0) ? (refOrbitBuffer ?? ensureDummyOrbitBuffer()) : ensureDummyOrbitBuffer()
-            enc.setBuffer(orbitBuf, offset: 0, index: 1)
+
+            let dummyOrbit = ensureDummyOrbitBuffer()
+            enc.setBuffer(dummyOrbit, offset: 0, index: 1) // always bound
+            enc.setBuffer(dummyOrbit, offset: 0, index: 2) // if kernel declares a second orbit pointer
+
+            if u.perturbation != 0, u.refCount > 0, let realOrbit = refOrbitBuffer {
+                enc.setBuffer(realOrbit, offset: 0, index: 1)
+            }
+
             enc.setTexture(outTex, index: 0)
             enc.setTexture(paletteTexture ?? ensureDummyPaletteTexture(), index: 1)
 
@@ -406,12 +419,49 @@ final class MandelbrotRenderer: NSObject, MTKViewDelegate {
         u.stepHi   = SIMD2<Float>(sX, sY)
         u.stepLo   = SIMD2<Float>(sXLo, sYLo)
 
+        // If perturbation is enabled, build a capture-time orbit for the current center.
+        // This avoids reusing a screen-orbit with mismatched iterations.
+        var snapOrbitBuffer: MTLBuffer? = nil
+        u.refCount = 0
+        if u.perturbation != 0 {
+            let w = Int(u.size.x), h = Int(u.size.y)
+            let c0x = Double(u.origin.x) + Double(w) * 0.5 * Double(u.step.x)
+            let c0y = Double(u.origin.y) + Double(h) * 0.5 * Double(u.step.y)
+            u.c0 = SIMD2<Float>(Float(c0x), Float(c0y))
+
+            let maxIt = Int(u.maxIt)
+            var orbit = [SIMD2<Float>](repeating: .zero, count: maxIt)
+            var zr = 0.0, zi = 0.0
+            for i in 0..<maxIt {
+                let zr2 = zr*zr - zi*zi + c0x
+                let zi2 = 2.0*zr*zi + c0y
+                zr = zr2; zi = zi2
+                orbit[i] = SIMD2<Float>(Float(zr), Float(zi))
+            }
+            let length = orbit.count * MemoryLayout<SIMD2<Float>>.stride
+            snapOrbitBuffer = device.makeBuffer(bytes: orbit, length: length, options: .storageModeShared)
+            u.refCount = Int32(maxIt)
+        }
+
+        // If a LUT palette was selected but we don't have a palette texture, fall back to HSV.
+        if u.palette == 3 && self.paletteTexture == nil {
+            u.palette = 0
+        }
+
         if let enc = cmd.makeComputeCommandEncoder() {
             enc.setComputePipelineState(pipeline)
             var uLocal = u
             enc.setBytes(&uLocal, length: MemoryLayout<MandelbrotUniforms>.stride, index: 0)
-            let orbitBuf = (uLocal.perturbation != 0 && uLocal.refCount > 0) ? (self.refOrbitBuffer ?? self.ensureDummyOrbitBuffer()) : self.ensureDummyOrbitBuffer()
-            enc.setBuffer(orbitBuf, offset: 0, index: 1)
+
+            let dummyOrbit = self.ensureDummyOrbitBuffer()
+            enc.setBuffer(dummyOrbit, offset: 0, index: 1)
+            enc.setBuffer(dummyOrbit, offset: 0, index: 2)
+            if let snapOrbitBuffer {
+                enc.setBuffer(snapOrbitBuffer, offset: 0, index: 1)
+            } else if uLocal.perturbation != 0, uLocal.refCount > 0, let liveOrbit = self.refOrbitBuffer {
+                enc.setBuffer(liveOrbit, offset: 0, index: 1)
+            }
+
             enc.setTexture(snapTex, index: 0)
             enc.setTexture(self.paletteTexture ?? self.ensureDummyPaletteTexture(), index: 1)
             let w = pipeline.threadExecutionWidth
@@ -472,6 +522,7 @@ final class MandelbrotRenderer: NSObject, MTKViewDelegate {
         var full = Data(count: rowBytes * H)
 
         var u = self.uniforms
+        u.refCount = 0
         u.maxIt = Int32(max(1, iterations))
         u.pixelStep = 1
         u.deepMode = 1
@@ -569,10 +620,13 @@ final class MandelbrotRenderer: NSObject, MTKViewDelegate {
                         if uLocal.palette == 3 && self.paletteTexture == nil { uLocal.palette = 0 }
 
                         enc.setBytes(&uLocal, length: MemoryLayout<MandelbrotUniforms>.stride, index: 0)
-                        let orbitBuf = (uLocal.perturbation != 0 && uLocal.refCount > 0)
-                            ? (self.refOrbitBuffer ?? self.ensureDummyOrbitBuffer())
-                            : self.ensureDummyOrbitBuffer()
-                        enc.setBuffer(orbitBuf, offset: 0, index: 1)
+
+                        let dummyOrbit = self.ensureDummyOrbitBuffer()
+                        enc.setBuffer(dummyOrbit, offset: 0, index: 1)
+                        enc.setBuffer(dummyOrbit, offset: 0, index: 2)
+                        if uLocal.perturbation != 0, uLocal.refCount > 0, let liveOrbit = self.refOrbitBuffer {
+                            enc.setBuffer(liveOrbit, offset: 0, index: 1)
+                        }
                         enc.setTexture(tex, index: 0)
                         enc.setTexture(self.paletteTexture ?? self.ensureDummyPaletteTexture(), index: 1)
 
@@ -621,17 +675,25 @@ final class MandelbrotRenderer: NSObject, MTKViewDelegate {
             let msg = "Perturbation off: no reference orbit bound"
             print("[Renderer] \(msg)")
             uniforms.perturbation = 0
+            uniforms.refCount = 0
             NotificationCenter.default.post(name: .MandelbrotRendererFallback, object: self, userInfo: ["reason": msg])
         }
     }
 
-    private func ensureDummyOrbitBuffer() -> MTLBuffer? {
+    private func ensureDummyOrbitBuffer() -> MTLBuffer {
         if let b = dummyOrbitBuffer { return b }
-        var zero = SIMD2<Float>(repeating: 0)
-        dummyOrbitBuffer = device.makeBuffer(bytes: &zero,
-                                             length: MemoryLayout<SIMD2<Float>>.stride,
-                                             options: .storageModeShared)
-        return dummyOrbitBuffer
+        // Some kernels (e.g., refOrbitDS) expect at least 16 bytes per element.
+        // Allocate two float2 (32 bytes) to be safely above the minimum.
+        var zeros = [SIMD2<Float>(repeating: 0), SIMD2<Float>(repeating: 0)]
+        let length = MemoryLayout<SIMD2<Float>>.stride * zeros.count // 2 * 16 = 32 on Metal (float2 is 8, but align safely)
+        guard let buf = device.makeBuffer(bytes: &zeros,
+                                          length: length,
+                                          options: .storageModeShared) else {
+            fatalError("Failed to create dummy orbit buffer")
+        }
+        buf.label = "dummyOrbitBuffer(>=16B)"
+        dummyOrbitBuffer = buf
+        return buf
     }
 
     private func buildReferenceOrbit(c0: SIMD2<Double>, maxIt: Int) {
@@ -647,6 +709,7 @@ final class MandelbrotRenderer: NSObject, MTKViewDelegate {
         uniforms.refCount = Int32(maxIt)
         let length = orbit.count * MemoryLayout<SIMD2<Float>>.stride
         refOrbitBuffer = device.makeBuffer(bytes: orbit, length: length, options: .storageModeShared)
+        refOrbitBuffer?.label = "refOrbitBuffer"
         print("[Perturb] orbit len=\(maxIt) c0=\(c0)")
     }
 

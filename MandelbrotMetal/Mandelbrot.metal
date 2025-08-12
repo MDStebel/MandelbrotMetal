@@ -120,6 +120,67 @@ inline ds2 ds_mul_f(ds2 a, float f) {
 }
 inline float ds_to_float(ds2 a) { return a.hi + a.lo; }
 
+// Complex ds2 multiply: (ax + i*ay) * (bx + i*by) = (ax*bx - ay*by) + i(ax*by + ay*bx)
+inline void ds_cmul(ds2 ax, ds2 ay, ds2 bx, ds2 by, thread ds2 &rx, thread ds2 &ry) {
+    ds2 ac = ds_mul(ax, bx);
+    ds2 bd = ds_mul(ay, by);
+    ds2 ad = ds_mul(ax, by);
+    ds2 bc = ds_mul(ay, bx);
+    rx = ds_sub(ac, bd);
+    ry = ds_add(ad, bc);
+}
+inline int iteratePerturbDS(ds2 cx, ds2 cy,
+                            ds2 c0x, ds2 c0y,
+                            const device float4 *ref,
+                            int refCount,
+                            int maxIt,
+                            thread float &zxOut,
+                            thread float &zyOut)
+{
+    // dz_{n+1} = 2*z_ref[n]*dz_n + dz_n^2 + (c - c0)
+    // z_{n+1}  = z_ref[n+1] + dz_{n+1}
+    ds2 dzx = ds_from_float(0.0f), dzy = ds_from_float(0.0f);
+    ds2 dcx = ds_sub(cx, c0x);
+    ds2 dcy = ds_sub(cy, c0y);
+    ds2 zx = ds_from_float(0.0f), zy = ds_from_float(0.0f);
+
+    const int N = min(maxIt, max(1, refCount) - 1);
+    for (int i = 0; i < N; ++i) {
+        // load z_ref[n] and z_ref[n+1] as DS (hi.xy, lo.zw)
+        float4 zn4   = ref[i];
+        float4 znp14 = ref[i + 1];
+        ds2 znx   = ds_make(zn4.x,   zn4.z);
+        ds2 zny   = ds_make(zn4.y,   zn4.w);
+        ds2 znp1x = ds_make(znp14.x, znp14.z);
+        ds2 znp1y = ds_make(znp14.y, znp14.w);
+
+        // two*zn * dz
+        ds2 two = ds_make(2.0f, 0.0f);
+        ds2 tznx = ds_mul(two, znx);
+        ds2 tzny = ds_mul(two, zny);
+        ds2 tzd_x, tzd_y;
+        ds_cmul(tznx, tzny, dzx, dzy, tzd_x, tzd_y);
+
+        // dz^2
+        ds2 dz2x, dz2y;
+        ds_cmul(dzx, dzy, dzx, dzy, dz2x, dz2y);
+
+        dzx = ds_add(ds_add(tzd_x, dz2x), dcx);
+        dzy = ds_add(ds_add(tzd_y, dz2y), dcy);
+
+        ds2 zxds = ds_add(znp1x, dzx);
+        ds2 zyds = ds_add(znp1y, dzy);
+        float zxF = ds_to_float(zxds);
+        float zyF = ds_to_float(zyds);
+        if (zxF*zxF + zyF*zyF > 4.0f) { zxOut = zxF; zyOut = zyF; return i; }
+
+        zx = zxds; zy = zyds;
+    }
+    zxOut = ds_to_float(zx);
+    zyOut = ds_to_float(zy);
+    return N;
+}
+
 // =============================================================
 // Mapping + interior tests
 // =============================================================
@@ -177,12 +238,46 @@ inline int iterateMandelDS(ds2 cx, ds2 cy, int maxIt, thread float &zxOut, threa
     return i;
 }
 
+inline int iteratePerturbF(float2 c,
+                           float2 c0,
+                           const device float2 *ref,
+                           int refCount,
+                           int maxIt,
+                           thread float &zxOut,
+                           thread float &zyOut)
+{
+    // Delta iteration around a reference orbit z_ref[n]
+    // dz_{n+1} = 2*z_ref[n]*dz_n + dz_n^2 + (c - c0)
+    // z_{n+1} = z_ref[n+1] + dz_{n+1}
+    float2 dz = float2(0.0, 0.0);
+    const float2 dc = c - c0;
+    float2 z = float2(0.0, 0.0);
+
+    const int N = min(maxIt, max(1, refCount) - 1);
+    for (int i = 0; i < N; ++i) {
+        const float2 zn   = ref[i];
+        const float2 znp1 = ref[i + 1];
+        const float2 twozn = float2(2.0f * zn.x, 2.0f * zn.y);
+        // twozn*dz
+        const float2 tzd = float2(twozn.x * dz.x - twozn.y * dz.y,
+                                   twozn.x * dz.y + twozn.y * dz.x);
+        // dz^2
+        const float2 dz2 = float2(dz.x * dz.x - dz.y * dz.y,
+                                  2.0f * dz.x * dz.y);
+        dz = tzd + dz2 + dc;
+        z = znp1 + dz;
+        if (dot(z, z) > 4.0f) { zxOut = z.x; zyOut = z.y; return i; }
+    }
+    zxOut = z.x; zyOut = z.y;
+    return N;
+}
+
 // =============================================================
 // Kernel
 // =============================================================
 kernel void mandelbrotKernel(
     constant MandelbrotUniforms& u              [[buffer(0)]],
-    const device float2 *refOrbit               [[buffer(1)]], // kept for ABI stability
+    const device float4 *refOrbitDS             [[buffer(1)]], // DS reference orbit
     texture2d<float, access::write> outTex      [[texture(0)]],
     texture2d<float, access::sample> paletteTex [[texture(1)]],
     uint2 gid [[thread_position_in_grid]]
@@ -215,7 +310,14 @@ kernel void mandelbrotKernel(
             float zx, zy;
             float2 cf = float2(ds_to_float(cx), ds_to_float(cy));
             if (!inInteriorF(cf)) {
-                int it = iterateMandelDS(cx, cy, max(1, u.maxIt), zx, zy);
+                int it;
+                if (u.perturbation != 0 && u.refCount > 1 && refOrbitDS != nullptr) {
+                    ds2 c0x = ds_from_float(u.c0.x);
+                    ds2 c0y = ds_from_float(u.c0.y);
+                    it = iteratePerturbDS(cx, cy, c0x, c0y, refOrbitDS, u.refCount, max(1, u.maxIt), zx, zy);
+                } else {
+                    it = iterateMandelDS(cx, cy, max(1, u.maxIt), zx, zy);
+                }
                 if (it < u.maxIt) {
                     float r2 = max(zx*zx + zy*zy, 1.0f + 1e-12f);
                     float log_zn = 0.5f * log(r2);
@@ -231,7 +333,12 @@ kernel void mandelbrotKernel(
             if (spp > 1) c += u.step * offsets[s];
             if (!inInteriorF(c)) {
                 float zx, zy;
-                int it = iterateMandelF(c, max(1, u.maxIt), zx, zy);
+                int it;
+                if (u.perturbation != 0 && u.refCount > 1 && refOrbitDS != nullptr) {
+                    it = iteratePerturbF(c, u.c0, (const device float2*)refOrbitDS, u.refCount, max(1, u.maxIt), zx, zy);
+                } else {
+                    it = iterateMandelF(c, max(1, u.maxIt), zx, zy);
+                }
                 if (it < u.maxIt) {
                     float r2 = max(zx*zx + zy*zy, 1.0f + 1e-12f);
                     float log_zn = 0.5f * log(r2);
