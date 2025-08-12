@@ -42,6 +42,8 @@ inline float shape_t(float t) {
     return pow(clamp((t - 0.01f) / 0.99f, 0.0f, 1.0f), 0.85f);
 }
 
+
+
 // =============================================================
 // Simple palettes + optional LUT
 // =============================================================
@@ -211,6 +213,13 @@ inline bool inInteriorF(float2 c) {
     return (q * (q + xq)) < (0.25f * c.y * c.y);        // main cardioid
 }
 
+// Cheap delta bailout: if the pixel's c is far from the reference c0,
+// we can assume fast escape and avoid expensive perturbation math.
+inline bool cheapDeltaEscape(float2 c, float2 c0) {
+    float2 d = c - c0;
+    return dot(d, d) > 16.0f; // radius 4^2 in c-space (tunable)
+}
+
 // =============================================================
 // Iteration — float & DS variants
 // =============================================================
@@ -315,6 +324,30 @@ kernel void mandelbrotKernel(
             float zx, zy;
             float2 cf = float2(ds_to_float(cx), ds_to_float(cy));
             if (!inInteriorF(cf)) {
+
+                // Cheap delta bailout: if far from reference c0, do a short float path and continue
+                if (u.perturbation != 0 && u.refCount > 1 && cheapDeltaEscape(cf, u.c0)) {
+                    zx = 0.0f; zy = 0.0f;
+                    int i = 0;
+                    int maxItLocal = max(1, u.maxIt);
+                    for (; i < min(maxItLocal, 64); ++i) {
+                        float xx = zx*zx - zy*zy + cf.x;
+                        float yy = 2.0f*zx*zy + cf.y;
+                        zx = xx; zy = yy;
+                        if (zx*zx + zy*zy > 4.0f) break;
+                    }
+                    if (i < maxItLocal) {
+                        float r2 = max(zx*zx + zy*zy, 1.0f + 1e-12f);
+                        float log_zn = 0.5f * log(r2);
+                        float nu = log(log_zn / log(2.0f)) / log(2.0f);
+                        float mu = (float)i + 1.0f - clamp(nu, 0.0f, 1.0f);
+                        float t = clamp(mu / (float)u.maxIt, 0.0f, 1.0f);
+                        t = shape_t(t);
+                        acc += pickColor(u.palette, t, paletteTex, samp);
+                    }
+                    continue;
+                }
+
                 int it;
                 if (u.perturbation != 0 && u.refCount > 1 && refOrbitDS != nullptr) {
                     ds2 c0x = ds_from_float(u.c0.x);
@@ -337,6 +370,30 @@ kernel void mandelbrotKernel(
             float2 c = mapComplexF(gid, u);
             if (spp > 1) c += u.step * offsets[s];
             if (!inInteriorF(c)) {
+
+                // Cheap delta bailout: if far from reference c0, do a short float path and continue
+                if (u.perturbation != 0 && u.refCount > 1 && cheapDeltaEscape(c, u.c0)) {
+                    float zx = 0.0f, zy = 0.0f;
+                    int i = 0;
+                    int maxItLocal = max(1, u.maxIt);
+                    for (; i < min(maxItLocal, 64); ++i) {
+                        float xx = zx*zx - zy*zy + c.x;
+                        float yy = 2.0f*zx*zy + c.y;
+                        zx = xx; zy = yy;
+                        if (zx*zx + zy*zy > 4.0f) break;
+                    }
+                    if (i < maxItLocal) {
+                        float r2 = max(zx*zx + zy*zy, 1.0f + 1e-12f);
+                        float log_zn = 0.5f * log(r2);
+                        float nu = log(log_zn / log(2.0f)) / log(2.0f);
+                        float mu = (float)i + 1.0f - clamp(nu, 0.0f, 1.0f);
+                        float t = clamp(mu / (float)u.maxIt, 0.0f, 1.0f);
+                        t = shape_t(t);
+                        acc += pickColor(u.palette, t, paletteTex, samp);
+                    }
+                    continue;
+                }
+
                 float zx, zy;
                 int it;
                 if (u.perturbation != 0 && u.refCount > 1 && refOrbitDS != nullptr) {
