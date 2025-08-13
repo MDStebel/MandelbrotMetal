@@ -67,7 +67,7 @@ final class MandelbrotRenderer: NSObject, MTKViewDelegate {
     private var highQualityIdle = true
 
     // Tunables
-    private let deepZoomThreshold: Double = 1.0e5 // switch to DS mapping here
+    private let deepZoomThreshold: Double = 1.0e4 // switch to DS mapping here
 
     private var uniforms = MandelbrotUniforms(
         origin: .zero,
@@ -213,7 +213,7 @@ final class MandelbrotRenderer: NSObject, MTKViewDelegate {
         uniforms.deepMode = (scalePixelsPerUnit >= deepZoomThreshold) ? 1 : 0
 
         // Enable 2×2 sub‑pixel SSAA for high zooms to reduce stair‑stepping
-        uniforms.subpixelSamples = (scalePixelsPerUnit >= 5.0e6) ? 4 : 1
+        uniforms.subpixelSamples = (scalePixelsPerUnit >= 1.0e5) ? 4 : 1
 
         // Base mapping
         let halfW = 0.5 * Double(pixelW)

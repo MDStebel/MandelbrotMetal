@@ -1,3 +1,10 @@
+//
+//  Mandelbrot.metal
+//  Mandelbrot Metal
+//
+//  Created by Michael Stebel on 8/13/25.
+//
+
 #include <metal_stdlib>
 using namespace metal;
 
@@ -123,19 +130,49 @@ inline float ds_to_float(ds2 a) { return a.hi + a.lo; }
 // =============================================================
 // Mapping + interior tests
 // =============================================================
+inline uint2 gridCenter(constant MandelbrotUniforms& u)
+{
+    // Center pixel indices (round down for even sizes — fine for DS anchoring)
+    return uint2(u.size.x >> 1, u.size.y >> 1);
+}
+
 inline float2 mapComplexF(uint2 gid, constant MandelbrotUniforms &u) {
-    return float2(u.origin.x + u.step.x * (float)gid.x,
-                  u.origin.y + u.step.y * (float)gid.y);
+    // Center‑relative mapping: base at center, add small offset
+    uint2 c = gridCenter(u);
+    float cx = (float)c.x;
+    float cy = (float)c.y;
+
+    // Base coordinate at the center (still fine in float at moderate zooms)
+    float2 base = float2(u.origin.x + u.step.x * cx,
+                         u.origin.y + u.step.y * cy);
+
+    // Offset from center
+    float dx = (float)gid.x - cx;
+    float dy = (float)gid.y - cy;
+
+    return base + float2(u.step.x * dx, u.step.y * dy);
 }
 inline void mapComplexDS(uint2 gid, constant MandelbrotUniforms &u,
                          thread ds2 &cx, thread ds2 &cy) {
-    float ix = (float)gid.x, iy = (float)gid.y;
-    float cxh = u.originHi.x + u.stepHi.x * ix;
-    float cyh = u.originHi.y + u.stepHi.y * iy;
-    float cxl = u.originLo.x + u.stepLo.x * ix;
-    float cyl = u.originLo.y + u.stepLo.y * iy;
-    cx = { cxh, cxl };
-    cy = { cyh, cyl };
+    uint2 c = gridCenter(u);
+    float cxIdx = (float)c.x;
+    float cyIdx = (float)c.y;
+
+    // DS base at center: base = origin + step * centerIndex
+    ds2 ox = { u.originHi.x, u.originLo.x };
+    ds2 oy = { u.originHi.y, u.originLo.y };
+    ds2 sx = { u.stepHi.x,   u.stepLo.x   };
+    ds2 sy = { u.stepHi.y,   u.stepLo.y   };
+
+    ds2 baseX = ds_add(ox, ds_mul_f(sx, cxIdx));
+    ds2 baseY = ds_add(oy, ds_mul_f(sy, cyIdx));
+
+    // Offset from center
+    float dx = (float)gid.x - cxIdx;
+    float dy = (float)gid.y - cyIdx;
+
+    cx = ds_add(baseX, ds_mul_f(sx, dx));
+    cy = ds_add(baseY, ds_mul_f(sy, dy));
 }
 inline bool inInteriorF(float2 c) {
     float xp1 = c.x + 1.0f;
@@ -152,10 +189,11 @@ inline int iterateMandelF(float2 c, int maxIt, thread float &zx, thread float &z
     zx = 0.0f; zy = 0.0f;
     int i = 0;
     for (; i < maxIt; ++i) {
-        float xx = zx*zx - zy*zy + c.x;
-        float yy = 2.0f*zx*zy + c.y;
+        // zx,zy -> zx^2 - zy^2 + cx ; 2*zx*zy + cy
+        float xx = fma(zx, zx, -zy*zy) + c.x;
+        float yy = fma(zx*zy, 2.0f, 0.0f) + c.y;
         zx = xx; zy = yy;
-        if (zx*zx + zy*zy > 4.0f) break;
+        if (fma(zx, zx, zy*zy) > 4.0f) break;
     }
     return i;
 }
