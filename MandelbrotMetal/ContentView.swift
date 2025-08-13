@@ -77,6 +77,20 @@ struct ContentView: View {
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
                         .transition(.opacity.combined(with: .move(edge: .top)))
                 }
+                // Tiny HUD chip for SSAA status
+                if (vm.renderer?.isSSAAActive ?? false) {
+                    Text("SSAA×2")
+                        .font(.caption2).bold()
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(.ultraThinMaterial, in: Capsule())
+                        .overlay(Capsule().strokeBorder(.white.opacity(0.2)))
+                        .padding(.top, 10)
+                        .padding(.trailing, 10)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+                        .transition(.opacity)
+                        .accessibilityLabel("Super sampling active: two by two")
+                }
                 floatingControls(geo)
                     .padding(.horizontal, 12)
                     .padding(.bottom, 8)

@@ -59,12 +59,15 @@ final class MandelbrotRenderer: NSObject, MTKViewDelegate {
     private var refOrbitBuffer: MTLBuffer?
     private var dummyOrbitBuffer: MTLBuffer?
 
-    private weak var mtkViewRef: MTKView?
-
-    // MARK: - State
-    var needsRender = true
     private var refinePending = false
     private var highQualityIdle = true
+
+    private weak var mtkViewRef: MTKView?
+
+    /// Exposes whether sub‑pixel SSAA is active (4 samples)
+    var isSSAAActive: Bool { uniforms.subpixelSamples >= 4 }
+
+    var needsRender = true
 
     // Tunables
     private let deepZoomThreshold: Double = 1.0e4 // switch to DS mapping here
