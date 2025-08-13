@@ -19,6 +19,8 @@ struct CompactOptionsSheet: View {
     @Binding var autoIterations: Bool
     @Binding var iterations: Int
     @Binding var highQualityIdle: Bool
+    @Binding var useDisplayP3: Bool
+    @Binding var lutWidth: Int
     @Binding var snapRes: ContentView.SnapshotRes
     
     let paletteOptions: [PaletteOption]
@@ -86,6 +88,11 @@ struct CompactOptionsSheet: View {
                     .onChange(of: localGradientItem) { _, item in
                         onImportGradient(item)
                     }
+                    Toggle("Wide Color (P3)", isOn: $useDisplayP3)
+                    Toggle("High‑res LUT (1024px)", isOn: Binding(
+                        get: { lutWidth == 1024 },
+                        set: { lutWidth = $0 ? 1024 : 256 }
+                    ))
                 } header: {
                     Text("Color")
                 }

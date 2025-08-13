@@ -39,6 +39,8 @@ struct ContentView: View {
     @State private var newBookmarkName: String = ""
     @State private var fallbackBanner: String? = nil
     @State private var fallbackObserver: NSObjectProtocol? = nil
+    @State private var useDisplayP3 = true
+    @State private var lutWidth = 1024
 
     enum SnapshotRes: String, CaseIterable, Identifiable {
         case canvas = "Canvas"
@@ -58,7 +60,7 @@ struct ContentView: View {
     private let kHQIdleKey = "hq_idle_render_v1"
     
     var body: some View {
-        GeometryReader { geo in
+        NavigationStack { GeometryReader { geo in
             ZStack {
                 fractalCanvas(geo)
                 hud
@@ -156,6 +158,8 @@ struct ContentView: View {
                 vm.renderer?.setInteractive(interactiveNow, baseIterations: vm.maxIterations)
                 vm.requestDraw()
             }
+            .onChange(of: useDisplayP3) { _, _ in refreshCurrentLUT() }
+            .onChange(of: lutWidth) { _, _ in refreshCurrentLUT() }
             .onChange(of: isInteracting) { _, active in
                 let interactiveNow = highQualityIdleRender ? active : true
                 vm.renderer?.setInteractive(interactiveNow, baseIterations: vm.maxIterations)
@@ -170,7 +174,6 @@ struct ContentView: View {
                     persistPaletteSelection()
                 }
             }
-            .toolbar { }
             .sheet(isPresented: $showPalettePicker) {
                 NavigationStack {
                     PalettePickerView(selected: currentPaletteName, options: paletteOptions) { opt in
@@ -251,32 +254,42 @@ struct ContentView: View {
             }
             .sheet(isPresented: .constant(false)) { EmptyView() } // placeholder
             .sheet(isPresented: $showOptionsSheet) {
-                CompactOptionsSheet(
-                    currentPaletteName: $currentPaletteName,
-                    showPalettePicker: $showPalettePicker,
-                    autoIterations: $autoIterations,
-                    iterations: $vm.maxIterations,
-                    highQualityIdle: $highQualityIdleRender,
-                    snapRes: $snapRes,
-                    paletteOptions: paletteOptions,
-                    applyPalette: { opt in
-                        applyPaletteOption(opt)
-                    },
-                    onImportGradient: { item in
-                        gradientItem = item
-                        importGradientItem(item)
-                    },
-                    onSave: { showCaptureSheet = true },
-                    onAbout: { showAbout = true },
-                    onHelp: { showHelp = true },
-                    onClose: { showOptionsSheet = false },
-                    onCustom: { showCustomRes = true }
-                )
-                .presentationDetents([.medium, .large])
-                .presentationDragIndicator(.visible)
+                optionsSheet()
             }
+            .navigationTitle("Mandelbrot")
+            .navigationBarTitleDisplayMode(.inline)
         }
     }
+}
+
+@ViewBuilder
+private func optionsSheet() -> some View {
+    CompactOptionsSheet(
+        currentPaletteName: $currentPaletteName,
+        showPalettePicker: $showPalettePicker,
+        autoIterations: $autoIterations,
+        iterations: $vm.maxIterations,
+        highQualityIdle: $highQualityIdleRender,
+        useDisplayP3: $useDisplayP3,
+        lutWidth: $lutWidth,
+        snapRes: $snapRes,
+        paletteOptions: paletteOptions,
+        applyPalette: { opt in
+            applyPaletteOption(opt)
+        },
+        onImportGradient: { item in
+            gradientItem = item
+            importGradientItem(item)
+        },
+        onSave: { showCaptureSheet = true },
+        onAbout: { showAbout = true },
+        onHelp: { showHelp = true },
+        onClose: { showOptionsSheet = false },
+        onCustom: { showCustomRes = true }
+    )
+    .presentationDetents([.medium, .large])
+    .presentationDragIndicator(.visible)
+}
     
     private func persistPaletteSelection() {
         UserDefaults.standard.set(currentPaletteName, forKey: kPaletteNameKey)
@@ -352,6 +365,19 @@ struct ContentView: View {
         let opt = paletteOptions.first { $0.name == name } ?? paletteOptions[0]
         return LinearGradient(gradient: Gradient(stops: opt.stops.map { .init(color: Color($0.1), location: $0.0) }), startPoint: .leading, endPoint: .trailing)
     }
+    
+    private func refreshCurrentLUT() {
+        // Only rebuild if the current palette is LUT-based (not GPU built-in)
+        guard let opt = paletteOptions.first(where: { $0.name == currentPaletteName && $0.builtInIndex == nil }) else {
+            return
+        }
+        if let img = makeLUTImage(stops: opt.stops, width: lutWidth, useDisplayP3: useDisplayP3) {
+            vm.renderer?.setPaletteImage(img)
+            vm.renderer?.setPalette(3) // LUT slot
+            palette = 3
+            vm.requestDraw()
+        }
+    }
 
     private func applyPaletteOption(_ opt: PaletteOption) {
         currentPaletteName = opt.name
@@ -359,7 +385,7 @@ struct ContentView: View {
             palette = idx
             vm.renderer?.setPalette(idx)
         } else {
-            if let img = makeLUTImage(stops: opt.stops) {
+            if let img = makeLUTImage(stops: opt.stops, width: lutWidth, useDisplayP3: useDisplayP3) {
                 vm.renderer?.setPaletteImage(img)
                 vm.renderer?.setPalette(3) // LUT slot
                 palette = 3
@@ -368,10 +394,10 @@ struct ContentView: View {
         vm.requestDraw()
     }
 
-    private func makeLUTImage(stops: [(CGFloat, UIColor)], width: Int = 256) -> UIImage? {
+    private func makeLUTImage(stops: [(CGFloat, UIColor)], width: Int, useDisplayP3: Bool) -> UIImage? {
         let w = max(2, width)
         let h = 1
-        let cs = CGColorSpaceCreateDeviceRGB()
+        let cs = useDisplayP3 ? CGColorSpace(name: CGColorSpace.displayP3)! : CGColorSpace(name: CGColorSpace.sRGB)!
         let bitsPerComp = 8
         let rowBytes = w * 4
         guard let ctx = CGContext(data: nil, width: w, height: h, bitsPerComponent: bitsPerComp, bytesPerRow: rowBytes, space: cs, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
@@ -410,6 +436,19 @@ struct ContentView: View {
                 .tint(.accentColor)
                 .foregroundStyle(.white)
                 .disabled(isCapturing)
+                Menu {
+                    Toggle("Wide Color (P3)", isOn: $useDisplayP3)
+                    Toggle("High‑res LUT (1024px)", isOn: Binding(
+                        get: { lutWidth == 1024 },
+                        set: { lutWidth = $0 ? 1024 : 256 }
+                    ))
+                } label: {
+                    Label("Color", systemImage: "paintpalette")
+                        .labelStyle(.iconOnly)
+                        .imageScale(.large)
+                        .padding(8)
+                }
+                .accessibilityLabel("Color options")
                 Button(action: { showOptionsSheet = true }) {
                     Label("Options", systemImage: "slider.horizontal.3")
                         .labelStyle(.iconOnly)
@@ -503,6 +542,15 @@ struct ContentView: View {
                                 .lineLimit(1)
                                 .minimumScaleFactor(0.85)
                         }
+                    }
+                    Menu {
+                        Toggle("Wide Color (P3)", isOn: $useDisplayP3)
+                        Toggle("High‑res LUT (1024px)", isOn: Binding(
+                            get: { lutWidth == 1024 },
+                            set: { lutWidth = $0 ? 1024 : 256 }
+                        ))
+                    } label: {
+                        Label("Color", systemImage: "paintpalette")
                     }
 
                     PhotosPicker(selection: $gradientItem, matching: .images) {
@@ -604,6 +652,16 @@ struct ContentView: View {
                 .font(compact ? Font.caption2 : Font.caption)
                 .monospaced()
                 .legibleText()
+          let f: Font = compact ? .caption2 : .caption
+          HStack(spacing: 6) {
+              Text("Color:")
+              Text(useDisplayP3 ? "P3" : "sRGB").bold()
+              Text("•")
+              Text("LUT \(lutWidth)")
+          }
+          .font(f)
+          .monospaced()
+          .legibleText()
         }
         .padding(compact ? 6 : 8)
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
