@@ -1,3 +1,10 @@
+//
+//  Mandelbrot.metal
+//  Mandelbrot Metal
+//
+//  Created by Michael Stebel on 8/8/25.
+//
+
 #include <metal_stdlib>
 using namespace metal;
 

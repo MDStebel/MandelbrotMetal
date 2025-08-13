@@ -146,10 +146,6 @@ struct ContentView: View {
     @State private var pendingCenter = SIMD2<Double>(0, 0)
     @State private var pendingScale  = 1.0
     @State private var palette = 0 // 0=HSV, 1=Fire, 2=Ocean
-    // Palette dithering + live editor
-    @AppStorage("paletteDither_v1") private var paletteDither: Bool = false
-    @State private var showGradientEditor: Bool = false
-    @State private var editableStops: [(CGFloat, UIColor)] = []
     @State private var gradientItem: PhotosPickerItem? = nil
     @State private var showPalettePicker = false
     @State private var currentPaletteName: String = "HSV" // tracks UI label for palette
@@ -298,7 +294,7 @@ struct ContentView: View {
                 vm.renderer?.setPalette(newValue)
                 vm.requestDraw()
             }
-            .onChange(of: highQualityIdleRender) { _, newValue in
+            .onChange(of: highQualityIdleRender) { newValue in
                 UserDefaults.standard.set(newValue, forKey: kHQIdleKey)
                 vm.renderer?.setHighQualityIdle(newValue)
                 // Re-evaluate interactive mode based on the switch
@@ -306,7 +302,7 @@ struct ContentView: View {
                 vm.renderer?.setInteractive(interactiveNow, baseIterations: vm.maxIterations)
                 vm.requestDraw()
             }
-            .onChange(of: isInteracting) { _, active in
+            .onChange(of: isInteracting) { active in
                 let interactiveNow = highQualityIdleRender ? active : true
                 vm.renderer?.setInteractive(interactiveNow, baseIterations: vm.maxIterations)
                 vm.requestDraw()
@@ -317,7 +313,7 @@ struct ContentView: View {
                 }
                 persistPaletteSelection()
             }
-            .onChange(of: contrast) { _, _ in
+            .onChange(of: contrast) { _ in
                 UserDefaults.standard.set(contrast, forKey: kContrastKey)
                 applyContrastIfNeeded()
             }
@@ -329,6 +325,7 @@ struct ContentView: View {
                     persistPaletteSelection()
                 }
             }
+            .toolbar { }
             .sheet(isPresented: $showPalettePicker) {
                 NavigationStack {
                     PalettePickerView(selected: currentPaletteName, options: paletteOptions) { opt in
@@ -493,20 +490,6 @@ struct ContentView: View {
                 }
             }
             .sheet(isPresented: .constant(false)) { EmptyView() } // placeholder
-            .sheet(isPresented: $showGradientEditor) {
-                NavigationStack {
-                    GradientEditorView(stops: $editableStops, onCancel: { showGradientEditor = false }, onSave: { newStops in
-                        // Create a temporary custom palette from edited stops and apply
-                        let opt = PaletteOption(name: "Custom (Edited)", builtInIndex: nil, stops: newStops)
-                        applyPaletteOption(opt)
-                        showGradientEditor = false
-                    })
-                    .navigationTitle("Edit Gradient")
-                    .toolbar {
-                        ToolbarItem(placement: .cancellationAction) { Button("Close") { showGradientEditor = false } }
-                    }
-                }
-            }
             .sheet(isPresented: $showOptionsSheet) {
                 CompactOptionsSheet(
                     currentPaletteName: $currentPaletteName,
@@ -575,7 +558,8 @@ struct ContentView: View {
                 onCanvasSizeChanged(newSize)
             }
             .onReceive(NotificationCenter.default.publisher(for: UIDevice.orientationDidChangeNotification)) { _ in
-                handleOrientationChange(geo.size)
+                vm.pushViewport(currentPointsSize(geo.size), screenScale: currentScreenScale())
+                vm.requestDraw()
             }
     }
 
@@ -594,11 +578,6 @@ struct ContentView: View {
             .font(compact ? .caption2 : .body)
             .accessibilityLabel(a11y)
             .foregroundStyle(.primary)
-    }
-    
-    private func handleOrientationChange(_ size: CGSize) {
-        vm.pushViewport(currentPointsSize(size), screenScale: currentScreenScale())
-        vm.requestDraw()
     }
 
     // MARK: - Palette system
@@ -626,7 +605,6 @@ struct ContentView: View {
             PaletteOption(name: "Steel",            builtInIndex: nil, stops: steelStops()),
             PaletteOption(name: "Bronze",           builtInIndex: nil, stops: bronzeStops()),
             PaletteOption(name: "Copper",           builtInIndex: nil, stops: copperStops()),
-            PaletteOption(name: "Oil Slick",       builtInIndex: nil, stops: oilSlickStops()),
             PaletteOption(name: "Titanium",         builtInIndex: nil, stops: titaniumStops()),
             PaletteOption(name: "Mercury",          builtInIndex: nil, stops: mercuryStops()),
             PaletteOption(name: "Pewter",           builtInIndex: nil, stops: pewterStops()),
@@ -685,7 +663,7 @@ struct ContentView: View {
             return
         }
         // Otherwise build a LUT (either custom palette or to honor non-1.0 contrast)
-        if let img = makeContrastLUTImage(stops: opt.stops, width: 512, contrast: contrast, dither: paletteDither) {
+        if let img = makeContrastLUTImage(stops: opt.stops, width: 512, contrast: contrast) {
             vm.renderer?.setPaletteImage(img)
             vm.renderer?.setPalette(3)
             palette = 3
@@ -764,7 +742,7 @@ struct ContentView: View {
     }
 
     // Contrast in HSV: adjust V (and gently S) per pixel so hue is preserved
-    private func makeContrastLUTImage(stops: [(CGFloat, UIColor)], width: Int = 256, contrast: Double, dither: Bool) -> UIImage? {
+    private func makeContrastLUTImage(stops: [(CGFloat, UIColor)], width: Int = 256, contrast: Double) -> UIImage? {
         // 1) Build a linear LUT image from the provided stops
         guard let base = makeLUTImage(stops: stops, width: width), let cg = base.cgImage else { return nil }
         let w = cg.width
@@ -802,21 +780,11 @@ struct ContentView: View {
 
                 let (rr, gg, bb) = hsvToRGB(h: hue, s: sAdj, v: vAdj)
 
-                // Optional tiny blue-noise style jitter to reduce visible banding when sampling the LUT in the shader
-                var rrJ = rr, ggJ = gg, bbJ = bb
-                if dither {
-                    // Hash-like deterministic noise based on x (so it is stable across rebuilds)
-                    // amplitude ~ 1/255 so it is visually subtle
-                    let n = sin(Double((x &* 1973) ^ 0x9E3779B9)) * 43758.5453
-                    let j = (n - floor(n)) * (1.0 / 255.0) - (1.0 / 510.0)
-                    rrJ = min(1.0, max(0.0, rr + j))
-                    ggJ = min(1.0, max(0.0, gg + j))
-                    bbJ = min(1.0, max(0.0, bb + j))
-                }
-                dstPtr[i + 0] = UInt8(max(0.0, min(1.0, bbJ)) * 255.0) // B
-                dstPtr[i + 1] = UInt8(max(0.0, min(1.0, ggJ)) * 255.0) // G
-                dstPtr[i + 2] = UInt8(max(0.0, min(1.0, rrJ)) * 255.0) // R
-                dstPtr[i + 3] = UInt8(max(0.0, min(1.0, a  )) * 255.0) // A
+                // Write as BGRA premultipliedFirst (for MTLPixelFormat.bgra8Unorm)
+                dstPtr[i + 0] = UInt8(max(0.0, min(1.0, bb)) * 255.0) // B
+                dstPtr[i + 1] = UInt8(max(0.0, min(1.0, gg)) * 255.0) // G
+                dstPtr[i + 2] = UInt8(max(0.0, min(1.0, rr)) * 255.0) // R
+                dstPtr[i + 3] = UInt8(max(0.0, min(1.0, a )) * 255.0) // A
             }
         }
 
@@ -854,27 +822,12 @@ struct ContentView: View {
             }
         }
         guard let opt = paletteOptions.first(where: { $0.name == currentPaletteName }) else { return }
-        if let img = makeContrastLUTImage(stops: opt.stops, width: 512, contrast: contrast, dither: paletteDither) {
+        if let img = makeContrastLUTImage(stops: opt.stops, width: 512, contrast: contrast) {
             vm.renderer?.setPaletteImage(img)
             vm.renderer?.setPalette(3) // LUT slot
             palette = 3
             vm.requestDraw()
         }
-    }
-    // Oil Slick palette stops (iridescent look)
-    private func oilSlickStops() -> [(CGFloat, UIColor)] {
-        // Iridescent oil-film look: deep violets through teal, gold, and back
-        [
-            (0.00, UIColor(red:0.06, green:0.00, blue:0.10, alpha:1)),
-            (0.12, UIColor(red:0.35, green:0.00, blue:0.50, alpha:1)),
-            (0.25, UIColor(red:0.10, green:0.20, blue:0.70, alpha:1)),
-            (0.38, UIColor(red:0.00, green:0.65, blue:0.75, alpha:1)),
-            (0.50, UIColor(red:0.10, green:0.85, blue:0.60, alpha:1)),
-            (0.62, UIColor(red:0.90, green:0.80, blue:0.10, alpha:1)),
-            (0.75, UIColor(red:1.00, green:0.55, blue:0.00, alpha:1)),
-            (0.88, UIColor(red:0.85, green:0.20, blue:0.40, alpha:1)),
-            (1.00, UIColor(red:0.10, green:0.00, blue:0.15, alpha:1))
-        ]
     }
 
     // Palette stop generators
@@ -1311,22 +1264,6 @@ struct ContentView: View {
                         .padding(8)
                 }
                 .accessibilityLabel("Options")
-                // Dithering toggle (compact)
-                Toggle("Dither", isOn: $paletteDither)
-                    .labelsHidden()
-                    .onChange(of: paletteDither) { _, _ in applyContrastIfNeeded() }
-                // Live gradient editor (compact)
-                Button {
-                    if let opt = paletteOptions.first(where: { $0.name == currentPaletteName }) {
-                        editableStops = opt.stops
-                    } else { editableStops = hsvStops() }
-                    showGradientEditor = true
-                } label: {
-                    Image(systemName: "slider.horizontal.2.square.on.square")
-                }
-                .accessibilityLabel("Edit Gradient")
-                .buttonStyle(.bordered)
-                .controlSize(.regular)
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 10)
@@ -1437,37 +1374,6 @@ struct ContentView: View {
                             .foregroundStyle(.secondary)
                             .monospacedDigit()
                     }
-
-                    // Dithering toggle (reduces banding in smooth areas)
-                    Toggle("Dither", isOn: $paletteDither)
-                        .toggleStyle(.switch)
-                        .labelsHidden()
-                        .help("Palette dithering to reduce banding")
-                        .onChange(of: paletteDither) { _ in
-                            // Rebuild LUT-based palettes to apply dither
-                            applyContrastIfNeeded()
-                        }
-
-                    // Live gradient editor (enabled for LUT/custom palettes)
-                    Button {
-                        if let opt = paletteOptions.first(where: { $0.name == currentPaletteName }) {
-                            editableStops = opt.stops
-                        } else {
-                            editableStops = hsvStops()
-                        }
-                        showGradientEditor = true
-                    } label: {
-                        Label("Edit Gradient", systemImage: "slider.horizontal.2.square.on.square")
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.85)
-                    }
-                    .buttonStyle(.bordered)
-                    .controlSize(.regular)
-                    .disabled({
-                        // Allow editing for any palette; edited result becomes a LUT
-                        false
-                    }())
-
 
                     // Bookmarks
                     Menu("Bookmarks") {
@@ -1588,20 +1494,10 @@ struct ContentView: View {
                 .monospaced()
                 .legibleText()
             if let tag = vm.renderer?.deepZoomActiveTag {
-                Text(tag)
-                    .font(.caption2)
-                    .padding(4)
+                Text(tag).font(.caption2).padding(4)
                     .background(.ultraThinMaterial, in: Capsule())
             }
-
-            if let ssaa = vm.renderer?.ssaaActiveTag {
-                Text(ssaa)
-                    .font(.caption2)
-                    .monospaced()
-                    .padding(4)
-                    .background(.ultraThinMaterial, in: Capsule())
-                    .overlay(Capsule().strokeBorder(.white.opacity(0.2)))
-            }
+            vm.renderer?.ssaaActiveTag.map { Text($0).font(.caption2).monospaced().padding(4).background(.ultraThinMaterial, in: Capsule()).overlay(Capsule().strokeBorder(.white.opacity(0.2))) }
         }
         .padding(compact ? 6 : 8)
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
@@ -2112,78 +2008,6 @@ struct ContentView: View {
     
 }
 
-// MARK: - Live Gradient Editor
-struct GradientEditorView: View {
-    @Binding var stops: [(CGFloat, UIColor)]
-    var onCancel: () -> Void
-    var onSave: ([(CGFloat, UIColor)]) -> Void
-
-    var body: some View {
-        Form {
-            Section(header: Text("Stops")) {
-                ForEach(stops.indices, id: \.self) { i in
-                    HStack {
-                        Slider(value: Binding(
-                            get: { Double(stops[i].0) },
-                            set: { stops[i].0 = CGFloat(min(1.0, max(0.0, $0))) }
-                        ), in: 0...1)
-                        ColorPicker("", selection: Binding(
-                            get: { Color(stops[i].1) },
-                            set: { newVal in stops[i].1 = UIColor(newVal) }
-                        ))
-                        .labelsHidden()
-                        Button(role: .destructive) {
-                            stops.remove(at: i)
-                        } label: {
-                            Image(systemName: "trash")
-                        }
-                    }
-                }
-                Button {
-                    // Insert a mid stop
-                    let loc: CGFloat = stops.isEmpty ? 0.5 : min(1.0, max(0.0, (stops.map{$0.0}.sorted().adjacentMid() ?? 0.5)))
-                    stops.append((loc, .white))
-                } label: {
-                    Label("Add Stop", systemImage: "plus")
-                }
-            }
-
-            Section {
-                HStack {
-                    Spacer()
-                    Button("Cancel", role: .cancel) { onCancel() }
-                    Spacer()
-                    Button("Save") {
-                        // Ensure sorted by location and clamped to [0,1]
-                        var cleaned = stops.map { (min(1,max(0,$0.0)), $0.1) }
-                        cleaned.sort { $0.0 < $1.0 }
-                        onSave(cleaned)
-                    }
-                    .buttonStyle(.borderedProminent)
-                    Spacer()
-                }
-            }
-        }
-    }
-}
-
-extension Array where Element == CGFloat {
-    func adjacentMid() -> CGFloat? {
-        guard count >= 2 else { return nil }
-        let s = self.sorted()
-        var bestGap: CGFloat = -1
-        var bestMid: CGFloat?
-        for i in 0..<(s.count-1) {
-            let gap = s[i+1] - s[i]
-            if gap > bestGap {
-                bestGap = gap
-                bestMid = s[i] + gap/2
-            }
-        }
-        return bestMid
-    }
-}
-
 // MARK: - High-Contrast Toggle Style
 struct AccessibleSwitchToggleStyle: ToggleStyle {
     var onColor: Color = .accentColor
@@ -2250,72 +2074,110 @@ private struct HelpView: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: compact ? 14 : 18) {
-                // Title
-                Text("Help & Tips")
-                    .font(compact ? .title2.bold() : .largeTitle.bold())
-                    .padding(.bottom, compact ? 4 : 8)
+                VStack(alignment: .leading, spacing: 18) {
+                    // Title
+                    HStack(spacing: 10) {
+                        Image(systemName: "square.grid.3x3")
+                            .imageScale(.large)
+                        Text("Mandelbrot Metal — Help")
+                            .font(.title2).bold()
+                    }
+                    .padding(.bottom, 4)
 
-                // --- Navigation ---
-                sectionHeader("Navigation")
-                bullet("Pinch to zoom", "magnifyingglass")
-                bullet("Drag to pan the canvas", "hand.draw")
-                bullet("Double‑tap to zoom at tap point", "plus.magnifyingglass")
-                Text("Reset returns to the default view and also resets **Iterations** and **Contrast**.")
-                    .fixedSize(horizontal: false, vertical: true)
+                    Text("A quick guide to the controls, gestures, and new features.")
+                        .foregroundStyle(.secondary)
 
-                // --- Quality Modes ---
-                sectionHeader("Quality Modes")
-                Text("**HQ Idle** – When you stop interacting, the renderer runs a high‑quality refinement pass (higher iterations and anti‑aliasing). This yields a sharper image at the cost of extra GPU/battery.")
-                    .fixedSize(horizontal: false, vertical: true)
-                Text("**SSAA ×2** – Super‑Sampling Anti‑Aliasing renders at 2× resolution and downsamples for smoother edges. A “SSAA×2” tag appears in the HUD when active.")
-                    .fixedSize(horizontal: false, vertical: true)
-                Text("**Deep Zoom** – Extended‑precision mapping engages automatically at extreme magnifications (≈ 10⁷× and beyond) to reduce precision artifacts. There’s no switch to manage.")
-                    .fixedSize(horizontal: false, vertical: true)
+                    // Gestures
+                    GroupBox {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Label("Drag to pan", systemImage: "hand.draw")
+                            Label("Pinch to zoom", systemImage: "arrow.up.left.and.arrow.down.right")
+                            Label("Double-tap to zoom in 2× at the tap point", systemImage: "magnifyingglass")
+                            Label("Reset from the bottom bar", systemImage: "arrow.counterclockwise")
+                        }
+                    } label: { Label("Gestures", systemImage: "hand.point.up.left") }
 
-                // --- Color & Contrast ---
-                sectionHeader("Color & Contrast")
-                Text("Choose a built‑in palette (HSV, Fire, Ocean, and many more) or import a gradient image to create a custom palette (LUT). The **Contrast** slider increases or softens tonal separation while preserving palette hue.")
-                    .fixedSize(horizontal: false, vertical: true)
+                    // Color & Palettes
+                    GroupBox {
+                        VStack(alignment: .leading, spacing: 10) {
+                            Label("Palette Picker with categories", systemImage: "paintpalette")
+                                .font(.headline)
 
-                // --- Iterations ---
-                sectionHeader("Iterations")
-                Text("Use the **Iterations** slider or stepper to control detail. Enable **Auto Iter** to grow iterations with zoom. The growth curve is tuned for responsiveness while exploring, with a high‑quality pass when idle (if HQ Idle is enabled).")
-                    .fixedSize(horizontal: false, vertical: true)
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("• Vivid: Neon, Vibrant, Sunset Glow, Candy, Aurora Borealis, Tropical, Flamingo, Lagoon, Cyberpunk, Lava")
+                                Text("• Metallics: Metallic Silver, Chrome, Gold, Rose Gold, Steel, Bronze, Copper, Titanium, Mercury, Pewter, Iridescent")
+                                Text("• Scientific: Magma, Inferno, Plasma, Viridis, Turbo, Cubehelix, Grayscale")
+                                Text("• Natural & Gem collections")
+                            }
 
-                // --- Bookmarks ---
-                sectionHeader("Bookmarks")
-                Text("Save favorite views and return to them later. A bookmark stores center, zoom, and palette.")
-                    .fixedSize(horizontal: false, vertical: true)
+                            Divider()
 
-                // --- Capture & Export ---
-                sectionHeader("Capture & Export")
-                Text("Open **Capture Image** to export at Canvas/4K/6K/8K or a custom size. **Preserve canvas aspect** keeps the saved image proportional to what you see. Choose **PNG** for maximum quality or **JPEG** (with adjustable quality) for smaller files. You can also **Copy** the current canvas to the clipboard.")
-                    .fixedSize(horizontal: false, vertical: true)
+                            Label("Live Gradient Editor", systemImage: "slider.horizontal.3")
+                            Text("Build custom palettes from gradient stops. You can also import an image from Photos to sample its gradient.")
+                                .font(.footnote).foregroundStyle(.secondary)
 
-                // --- HUD Indicators ---
-                sectionHeader("HUD Indicators")
-                bullet("“Deep Zoom” appears when extended‑precision math is active", "scope")
-                bullet("“SSAA×2” appears when 2× super‑sampling is active", "sparkles")
+                            Label("Palette dithering toggle", systemImage: "checkerboard.rectangle")
+                            Text("Reduces banding in smooth gradients. Toggle in Options.", comment: "helper hint")
+                                .font(.footnote).foregroundStyle(.secondary)
 
-                // --- Performance Tips ---
-                sectionHeader("Performance Tips")
-                bullet("Explore first, export later", "speedometer", suffix: "Keep iterations moderate while navigating; let HQ Idle refine, and export high‑res when you’re happy with the framing.")
-                bullet("Device limits", "cpu", suffix: "6K exports are faster and lighter than 8K on older devices.")
+                            Label("Contrast control (0.5×–2.0×)", systemImage: "circle.lefthalf.filled")
+                            Text("Adjusts brightness/value while preserving hue. When contrast = 1.0, built-in GPU palettes are used automatically for maximum performance.")
+                                .font(.footnote).foregroundStyle(.secondary)
+                        }
+                    } label: { Label("Color & Palettes", systemImage: "paintpalette") }
 
-                // --- Troubleshooting ---
-                sectionHeader("Troubleshooting")
-                bullet("Black screen", "exclamationmark.triangle", suffix: "Iterations may be too high for your zoom; tap **Reset**.")
-                bullet("Colors look off after import", "paintpalette", suffix: "Re‑select the palette or set **Contrast** back to 1.0×.")
-                bullet("Capture looks stretched", "rectangle.on.rectangle", suffix: "Enable **Preserve canvas aspect** in Capture.")
+                    // Rendering & Quality
+                    GroupBox {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Label("Deep Zoom is always on", systemImage: "sparkles")
+                            Text("The renderer seamlessly switches to high-precision paths as you zoom.")
+                                .font(.footnote).foregroundStyle(.secondary)
 
-                Divider().padding(.vertical, 4)
-                Text(appMeta())
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
+                            Label("Auto Iterations (optional)", systemImage: "aqi.medium")
+                            Text("Iteration count scales with zoom so details stay crisp without manual tuning.")
+                                .font(.footnote).foregroundStyle(.secondary)
+
+                            Label("High-Quality Idle", systemImage: "wand.and.stars")
+                            Text("When not interacting, frames refine with higher iteration budgets.")
+                                .font(.footnote).foregroundStyle(.secondary)
+                        }
+                    } label: { Label("Rendering & Quality", systemImage: "cpu") }
+
+                    // Export, Capture & Bookmarks
+                    GroupBox {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Label("Copy current canvas to clipboard", systemImage: "square.on.square")
+                            Label("Capture image (PNG/JPEG)", systemImage: "camera")
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("• Presets: Canvas, 4K, 6K, 8K, or Custom size")
+                                Text("• JPEG quality control and aspect preservation")
+                            }
+                            .font(.footnote).foregroundStyle(.secondary)
+
+                            Label("Bookmarks", systemImage: "bookmark")
+                            Text("Save and return to favorite views.", comment: "helper hint")
+                                .font(.footnote).foregroundStyle(.secondary)
+                        }
+                    } label: { Label("Export & Bookmarks", systemImage: "square.and.arrow.up") }
+
+                    // Tips
+                    GroupBox {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Label("Use Options for palettes, contrast, dithering, Auto Iterations & HQ Idle", systemImage: "slider.horizontal.3")
+                            Label("If the image ever appears blank after a rotation, just tap or pan — it auto-refreshes.", systemImage: "arrow.triangle.2.circlepath")
+                        }
+                    } label: { Label("Tips", systemImage: "lightbulb") }
+
+                    Spacer(minLength: 4)
+                    
+                    let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? ""
+                    let build   = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? ""
+                    Text("Version \(version) (\(build))")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+                .padding(16)
             }
-            .padding(compact ? 16 : 20)
-        }
     }
 
     // MARK: UI helpers
@@ -2331,11 +2193,7 @@ private struct HelpView: View {
     @ViewBuilder private func bullet(_ title: String, _ symbol: String, suffix: String? = nil) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 10) {
             Image(systemName: symbol).frame(width: 18)
-            if let suffix {
-                Text("**\(title)** — \(suffix)")
-            } else {
-                Text("**\(title)**")
-            }
+            if let suffix { Text("**\(title)** — \(suffix)") } else { Text("**\(title)**") }
         }
         .font(compact ? .caption : .body)
     }
