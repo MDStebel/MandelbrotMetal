@@ -6,7 +6,12 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		E202DCA32E4D14660055139D /* BundleIdentifiers.swift in Sources */ = {isa = PBXBuildFile; fileRef = E202DCA22E4D14660055139D /* BundleIdentifiers.swift */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXFileReference section */
+		E202DCA22E4D14660055139D /* BundleIdentifiers.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BundleIdentifiers.swift; sourceTree = "<group>"; };
 		E26454322E46F7000015F51C /* Mandelbrot Metal.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Mandelbrot Metal.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
@@ -47,6 +52,7 @@
 			children = (
 				E26454342E46F7000015F51C /* MandelbrotMetal */,
 				E26454332E46F7000015F51C /* Products */,
+				E202DCA22E4D14660055139D /* BundleIdentifiers.swift */,
 			);
 			sourceTree = "<group>";
 		};
@@ -132,6 +138,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				E202DCA32E4D14660055139D /* BundleIdentifiers.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -265,7 +272,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 40;
+				CURRENT_PROJECT_VERSION = 41;
 				DEVELOPMENT_TEAM = ZA3NQHY725;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
@@ -299,7 +306,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 40;
+				CURRENT_PROJECT_VERSION = 41;
 				DEVELOPMENT_TEAM = ZA3NQHY725;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
