@@ -14,9 +14,10 @@ import simd
 
 struct PalettePickerView: View {
     @Environment(\.horizontalSizeClass) private var hSize
+    @State private var refreshID = UUID()
     let selected: String
-    let options: [ContentView.PaletteOption]
-    let onSelect: (ContentView.PaletteOption) -> Void
+    let options: [PaletteOption]
+    let onSelect: (PaletteOption) -> Void
 
     var body: some View {
         let cols: [GridItem] = (hSize == .compact)
@@ -24,12 +25,13 @@ struct PalettePickerView: View {
             : [GridItem(.adaptive(minimum: 160), spacing: 16)]
         return ScrollView {
             LazyVGrid(columns: cols, spacing: 16) {
-                ForEach(options) { opt in
-                    PaletteSwatchButton(option: opt, selected: opt.name == selected) {
+                ForEach(PaletteFavorites.shared.sorted(options)) { opt in
+                    PaletteSwatchButton(option: opt, selected: opt.name == selected, onFavoriteToggle: { refreshID = UUID() }) {
                         onSelect(opt)
                     }
                 }
             }
+            .id(refreshID)
             .padding()
         }
     }
@@ -37,9 +39,17 @@ struct PalettePickerView: View {
 
 // Extracted swatch view for simpler type-checking
 struct PaletteSwatchButton: View {
-    let option: ContentView.PaletteOption
+    let option: PaletteOption
     let selected: Bool
     let action: () -> Void
+    let onFavoriteToggle: () -> Void
+
+    init(option: PaletteOption, selected: Bool, onFavoriteToggle: @escaping () -> Void = {}, action: @escaping () -> Void) {
+        self.option = option
+        self.selected = selected
+        self.onFavoriteToggle = onFavoriteToggle
+        self.action = action
+    }
 
     private var gradientStops: [Gradient.Stop] {
         option.stops.map { stop in
@@ -66,7 +76,21 @@ struct PaletteSwatchButton: View {
                             .padding(4)
                     }
                 }
-                Text(option.name).font(.subheadline)
+                HStack(alignment: .center, spacing: 8) {
+                    Text(option.name)
+                        .font(.subheadline)
+                        .lineLimit(1)
+                    Spacer(minLength: 4)
+                    Button(action: {
+                        PaletteFavorites.shared.toggle(name: option.name)
+                        onFavoriteToggle()
+                    }) {
+                        Image(systemName: PaletteFavorites.shared.isFavorite(name: option.name) ? "star.fill" : "star")
+                            .imageScale(.small)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(PaletteFavorites.shared.isFavorite(name: option.name) ? "Unfavorite" : "Favorite")
+                }
             }
             .padding(10)
             .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))

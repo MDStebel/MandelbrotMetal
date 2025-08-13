@@ -21,8 +21,8 @@ struct CompactOptionsSheet: View {
     @Binding var highQualityIdle: Bool
     @Binding var snapRes: ContentView.SnapshotRes
     
-    let paletteOptions: [ContentView.PaletteOption]
-    let applyPalette: (ContentView.PaletteOption) -> Void
+    let paletteOptions: [PaletteOption]
+    let applyPalette: (PaletteOption) -> Void
     let onImportGradient: (PhotosPickerItem?) -> Void
     let onSave: () -> Void
     let onAbout: () -> Void
