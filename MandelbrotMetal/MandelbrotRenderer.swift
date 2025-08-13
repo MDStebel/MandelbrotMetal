@@ -12,6 +12,7 @@ import simd
 
 extension Notification.Name {
     static let MandelbrotRendererFallback = Notification.Name("MandelbrotRendererFallback")
+    static let SSAAStateChanged = Notification.Name("MandelbrotRenderer.SSAAStateChanged")
 }
 
 /// IMPORTANT: This struct must exactly match the struct in `mandelbrot.metal`.
@@ -49,6 +50,7 @@ final class MandelbrotRenderer: NSObject, MTKViewDelegate {
     private let device: MTLDevice
     private let queue: MTLCommandQueue
     private let pipeline: MTLComputePipelineState
+    private let pipelinePerturb: MTLComputePipelineState?
 
     // Offscreen render target (we blit to drawable)
     private var outTex: MTLTexture?
@@ -108,12 +110,26 @@ final class MandelbrotRenderer: NSObject, MTKViewDelegate {
 
         do {
             let lib = try device.makeDefaultLibrary(bundle: .main)
-            guard let fn = lib.makeFunction(name: "mandelbrotKernel") else {
-                print("MandelbrotRenderer.init: **KERNEL NOT FOUND** in default library")
+
+            // Primary kernel
+            guard let fnMain = lib.makeFunction(name: "mandelbrotKernel") else {
+                print("MandelbrotRenderer.init: **KERNEL NOT FOUND** (mandelbrotKernel) in default library")
                 return nil
             }
-            self.pipeline = try device.makeComputePipelineState(function: fn)
-            print("MandelbrotRenderer.init: pipeline created")
+            self.pipeline = try device.makeComputePipelineState(function: fnMain)
+
+            // Optional perturbation kernel (same bindings)
+            if let fnPerturb = lib.makeFunction(name: "mandelbrotKernelPerturb") {
+                self.pipelinePerturb = try? device.makeComputePipelineState(function: fnPerturb)
+                if self.pipelinePerturb == nil {
+                    print("MandelbrotRenderer.init: warn: failed to create pipeline for mandelbrotKernelPerturb; will fall back to main kernel")
+                }
+            } else {
+                self.pipelinePerturb = nil
+                print("MandelbrotRenderer.init: mandelbrotKernelPerturb not found; running without perturbation pipeline")
+            }
+
+            print("MandelbrotRenderer.init: pipeline(s) created")
         } catch {
             print("MandelbrotRenderer.init: **FAILED** to build library/pipeline: \(error)")
             return nil
@@ -136,6 +152,9 @@ final class MandelbrotRenderer: NSObject, MTKViewDelegate {
             height: UIScreen.main.bounds.height * UIScreen.main.scale
         )
         mtkView.delegate = self
+        // Enable perturbation by default; the reference orbit will be built on the first setViewport()
+        // and subsequently rebuilt on viewport changes (see setViewport(_:)).
+        uniforms.perturbation = 0  // default OFF; enable via UI with setPerturbation(true)
         print("MandelbrotRenderer.init: complete. framebufferOnly=\(mtkView.framebufferOnly)")
     }
 
@@ -209,6 +228,7 @@ final class MandelbrotRenderer: NSObject, MTKViewDelegate {
         uniforms.size = SIMD2<UInt32>(UInt32(pixelW), UInt32(pixelH))
         uniforms.maxIt = Int32(max(1, maxIterations))
         uniforms.pixelStep = 1
+        let prevSSAA = (uniforms.subpixelSamples >= 4)
 
         let invScale = 1.0 / max(1e-12, scalePixelsPerUnit)
 
@@ -217,6 +237,12 @@ final class MandelbrotRenderer: NSObject, MTKViewDelegate {
 
         // Enable 2×2 sub‑pixel SSAA for high zooms to reduce stair‑stepping
         uniforms.subpixelSamples = (scalePixelsPerUnit >= 1.0e5) ? 4 : 1
+        let nowSSAA = (uniforms.subpixelSamples >= 4)
+        if nowSSAA != prevSSAA {
+            NotificationCenter.default.post(name: .SSAAStateChanged,
+                                            object: self,
+                                            userInfo: ["active": nowSSAA])
+        }
 
         // Base mapping
         let halfW = 0.5 * Double(pixelW)
@@ -307,7 +333,10 @@ final class MandelbrotRenderer: NSObject, MTKViewDelegate {
 
         // Encode compute kernel
         if let enc = cmd.makeComputeCommandEncoder() {
-            enc.setComputePipelineState(pipeline)
+            // Pick kernel: use perturb version only when enabled, orbit present, and pipeline available
+            let usePerturb = (uniforms.perturbation != 0 && uniforms.refCount > 0 && pipelinePerturb != nil)
+            let pipe = usePerturb ? pipelinePerturb! : pipeline
+            enc.setComputePipelineState(pipe)
 
             var u = uniforms
             // Bindings must match the kernel signature:
@@ -319,8 +348,8 @@ final class MandelbrotRenderer: NSObject, MTKViewDelegate {
             enc.setTexture(paletteTexture ?? ensureDummyPaletteTexture(), index: 1)
 
             // Uniform threadgroup sizing (simulator-safe)
-            let w = pipeline.threadExecutionWidth
-            let h = max(1, pipeline.maxTotalThreadsPerThreadgroup / w)
+            let w = pipe.threadExecutionWidth
+            let h = max(1, pipe.maxTotalThreadsPerThreadgroup / w)
             let tg = MTLSize(width: w, height: h, depth: 1)
             let gridW = Int(u.size.x), gridH = Int(u.size.y)
             let groups = MTLSize(width:  (gridW + tg.width  - 1) / tg.width,
@@ -344,6 +373,13 @@ final class MandelbrotRenderer: NSObject, MTKViewDelegate {
         }
 
         drawable.present()
+
+        // Ensure HUD sees initial SSAA state after first size seed
+        if uniforms.size.x != 0 && uniforms.size.y != 0 {
+            NotificationCenter.default.post(name: .SSAAStateChanged,
+                                            object: self,
+                                            userInfo: ["active": (uniforms.subpixelSamples >= 4)])
+        }
 
         cmd.addCompletedHandler { [weak self] _ in
             guard let self else { return }
@@ -410,15 +446,17 @@ final class MandelbrotRenderer: NSObject, MTKViewDelegate {
         u.stepLo   = SIMD2<Float>(sXLo, sYLo)
 
         if let enc = cmd.makeComputeCommandEncoder() {
-            enc.setComputePipelineState(pipeline)
+            let usePerturb = (u.perturbation != 0 && u.refCount > 0 && pipelinePerturb != nil)
+            let pipe = usePerturb ? pipelinePerturb! : pipeline
+            enc.setComputePipelineState(pipe)
             var uLocal = u
             enc.setBytes(&uLocal, length: MemoryLayout<MandelbrotUniforms>.stride, index: 0)
             let orbitBuf = (uLocal.perturbation != 0 && uLocal.refCount > 0) ? (self.refOrbitBuffer ?? self.ensureDummyOrbitBuffer()) : self.ensureDummyOrbitBuffer()
             enc.setBuffer(orbitBuf, offset: 0, index: 1)
             enc.setTexture(snapTex, index: 0)
             enc.setTexture(self.paletteTexture ?? self.ensureDummyPaletteTexture(), index: 1)
-            let w = pipeline.threadExecutionWidth
-            let h = max(1, pipeline.maxTotalThreadsPerThreadgroup / w)
+            let w = pipe.threadExecutionWidth
+            let h = max(1, pipe.maxTotalThreadsPerThreadgroup / w)
             let tg = MTLSize(width: w, height: h, depth: 1)
             let gridW = Int(u.size.x), gridH = Int(u.size.y)
             let groups = MTLSize(width:  (gridW + tg.width  - 1) / tg.width,
@@ -567,9 +605,12 @@ final class MandelbrotRenderer: NSObject, MTKViewDelegate {
                     u.stepLo   = SIMD2<Float>(sXLo, sYLo)
 
                     if let enc = cmd.makeComputeCommandEncoder() {
-                        enc.setComputePipelineState(self.pipeline)
                         var uLocal = u
                         if uLocal.palette == 3 && self.paletteTexture == nil { uLocal.palette = 0 }
+
+                        let usePerturb = (uLocal.perturbation != 0 && uLocal.refCount > 0 && self.pipelinePerturb != nil)
+                        let pipe = usePerturb ? self.pipelinePerturb! : self.pipeline
+                        enc.setComputePipelineState(pipe)
 
                         enc.setBytes(&uLocal, length: MemoryLayout<MandelbrotUniforms>.stride, index: 0)
                         let orbitBuf = (uLocal.perturbation != 0 && uLocal.refCount > 0)
@@ -579,8 +620,8 @@ final class MandelbrotRenderer: NSObject, MTKViewDelegate {
                         enc.setTexture(tex, index: 0)
                         enc.setTexture(self.paletteTexture ?? self.ensureDummyPaletteTexture(), index: 1)
 
-                        let wth = self.pipeline.threadExecutionWidth
-                        let hth = max(1, self.pipeline.maxTotalThreadsPerThreadgroup / wth)
+                        let wth = pipe.threadExecutionWidth
+                        let hth = max(1, pipe.maxTotalThreadsPerThreadgroup / wth)
                         let tg = MTLSize(width: wth, height: hth, depth: 1)
                         let groups = MTLSize(width:  (t.w + tg.width  - 1) / tg.width,
                                              height: (t.h + tg.height - 1) / tg.height,
