@@ -276,10 +276,20 @@ struct ContentView: View {
                 }
             }
             .onChange(of: geo.size) { _, newSize in
-                vm.pushViewport(currentPointsSize(newSize), screenScale: currentScreenScale())
+                // Geometry changed (rotation/split view/resize). Recompute drawable size
+                // from the new points size so the aspect ratio stays correct.
+                DispatchQueue.main.async {
+                    if let v = vm.mtkView {
+                        let scale = v.window?.screen.scale ?? UIScreen.main.scale
+                        v.drawableSize = CGSize(width: newSize.width * scale,
+                                                height: newSize.height * scale)
+                    }
+                    vm.pushViewport(currentPointsSize(newSize), screenScale: currentScreenScale())
+                    vm.requestDraw()
+                }
             }
             .onChange(of: palette) { persistPaletteSelection() }
-            .onChange(of: highQualityIdleRender) { newValue in
+            .onChange(of: highQualityIdleRender) { _, newValue in
                 UserDefaults.standard.set(newValue, forKey: kHQIdleKey)
                 vm.renderer?.setHighQualityIdle(newValue)
                 // Re-evaluate interactive mode based on the switch
@@ -287,16 +297,16 @@ struct ContentView: View {
                 vm.renderer?.setInteractive(interactiveNow, baseIterations: vm.maxIterations)
                 vm.requestDraw()
             }
-            .onChange(of: isInteracting) { active in
+            .onChange(of: isInteracting) { _, active in
                 let interactiveNow = highQualityIdleRender ? active : true
                 vm.renderer?.setInteractive(interactiveNow, baseIterations: vm.maxIterations)
                 vm.requestDraw()
             }
-            .onChange(of: currentPaletteName) { _ in persistPaletteSelection() }
+            .onChange(of: currentPaletteName) { _, _ in persistPaletteSelection() }
             .onChange(of: vm.center)               { vm.saveState(perturb: false, deep: true, palette: palette) }
             .onChange(of: vm.scalePixelsPerUnit)   { vm.saveState(perturb: false, deep: true, palette: palette) }
             .onChange(of: vm.maxIterations)        { vm.saveState(perturb: false, deep: true, palette: palette) }
-            .onChange(of: scenePhase) { newPhase in
+            .onChange(of: scenePhase) { _, newPhase in
                 if newPhase == .background {
                     persistPaletteSelection()
                 }
