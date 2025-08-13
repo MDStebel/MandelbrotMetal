@@ -336,69 +336,191 @@ struct ContentView: View {
     // MARK: - Palette system
     struct PaletteOption: Identifiable { let id = UUID(); let name: String; let builtInIndex: Int?; let stops: [(CGFloat, UIColor)] }
 
+    // MARK: - Data-driven palette infrastructure (hex → UIColor)
+    private struct PaletteItem {
+        let name: String
+        let builtInIndex: Int?
+        let stopsHex: [(CGFloat, String)] // location ∈ [0,1], hex like "#FF00AA"
+    }
+
+    private func makeStops(from stopsHex: [(CGFloat, String)]) -> [(CGFloat, UIColor)] {
+        stopsHex.map { (loc, hex) in (loc, UIColor(hex: hex)) }
+    }
+    
     var paletteOptions: [PaletteOption] {
-        [
-            // ——— Vivid / Artistic LUTs ———
-            PaletteOption(name: "Neon",             builtInIndex: nil, stops: neonStops()),
-            PaletteOption(name: "Vibrant",          builtInIndex: nil, stops: vibrantStops()),
-            PaletteOption(name: "Sunset Glow",      builtInIndex: nil, stops: sunsetGlowStops()),
-            PaletteOption(name: "Candy",            builtInIndex: nil, stops: candyStops()),
-            PaletteOption(name: "Aurora Borealis",  builtInIndex: nil, stops: auroraBorealisStops()),
-            PaletteOption(name: "Tropical",         builtInIndex: nil, stops: tropicalStopsNew()),
-            PaletteOption(name: "Flamingo",         builtInIndex: nil, stops: flamingoStopsNew()),
-            PaletteOption(name: "Lagoon",           builtInIndex: nil, stops: lagoonStopsNew()),
-            PaletteOption(name: "Cyberpunk",        builtInIndex: nil, stops: cyberpunkStops()),
-            PaletteOption(name: "Lava",             builtInIndex: nil, stops: lavaStops()),
+        // Central, data-driven palette library. Add/remove here only.
+        let paletteData: [PaletteItem] = [
+            // ——— Vivid / Artistic ———
+            .init(name: "Neon", builtInIndex: nil, stopsHex: [
+                (0.00, "#000000"), (0.08, "#00FFC0"), (0.20, "#00CCFF"), (0.35, "#6733FF"),
+                (0.55, "#FF19E6"), (0.75, "#FFD133"), (1.00, "#FFFFFF")
+            ]),
+            .init(name: "Vibrant", builtInIndex: nil, stopsHex: [
+                (0.00, "#0D0526"), (0.15, "#3300B3"), (0.35, "#00A8FF"),
+                (0.55, "#00E665"), (0.75, "#FFD000"), (1.00, "#FF271A")
+            ]),
+            .init(name: "Sunset Glow", builtInIndex: nil, stopsHex: [
+                (0.00, "#140026"), (0.18, "#660066"), (0.38, "#D93666"),
+                (0.60, "#FF8A1A"), (0.82, "#FFE066"), (1.00, "#FFF7D9")
+            ]),
+            .init(name: "Candy", builtInIndex: nil, stopsHex: [
+                (0.00, "#1A0033"), (0.20, "#E636BF"), (0.40, "#FF6680"),
+                (0.60, "#FFB84D"), (0.80, "#E6F26A"), (1.00, "#CCFFF2")
+            ]),
+            .init(name: "Aurora Borealis", builtInIndex: nil, stopsHex: [
+                (0.00, "#000613"), (0.18, "#00665A"), (0.36, "#00CBB0"),
+                (0.58, "#59F2E6"), (0.78, "#99D6FF"), (1.00, "#EBF7FF")
+            ]),
+            .init(name: "Cyberpunk", builtInIndex: nil, stopsHex: [
+                (0.00, "#0A0015"), (0.20, "#1F008C"), (0.40, "#8C00D9"),
+                (0.60, "#00E5EB"), (0.80, "#FF3399"), (1.00, "#FFF2E6")
+            ]),
+            .init(name: "Lava", builtInIndex: nil, stopsHex: [
+                (0.00, "#000000"), (0.18, "#400000"), (0.38, "#A50000"),
+                (0.58, "#FF4D00"), (0.78, "#FFB800"), (1.00, "#FFFFFF")
+            ]),
+            .init(name: "Peacock", builtInIndex: nil, stopsHex: [
+                (0.00, "#061018"), (0.18, "#004D40"), (0.38, "#009688"),
+                (0.58, "#26C6DA"), (0.78, "#7E57C2"), (1.00, "#EDE7F6")
+            ]),
+            .init(name: "Twilight", builtInIndex: nil, stopsHex: [
+                (0.00, "#00020A"), (0.25, "#061A40"), (0.50, "#0B4F6C"),
+                (0.75, "#145C9E"), (1.00, "#E0F2FF")
+            ]),
+            .init(name: "Cosmic Fire", builtInIndex: nil, stopsHex: [
+                (0.00, "#060000"), (0.22, "#3D0711"), (0.44, "#920E1B"),
+                (0.66, "#FF6A00"), (0.88, "#FFD166"), (1.00, "#FFF4D6")
+            ]),
+            .init(name: "Electric Blue", builtInIndex: nil, stopsHex: [
+                (0.00, "#00030A"), (0.20, "#001B44"), (0.45, "#0066FF"),
+                (0.75, "#33B3FF"), (1.00, "#E6F3FF")
+            ]),
 
-            // ——— Metallic / Shiny LUTs ———
-            PaletteOption(name: "Metallic Silver",  builtInIndex: nil, stops: metallicSilverStops()),
-            PaletteOption(name: "Chrome",           builtInIndex: nil, stops: chromeStops()),
-            PaletteOption(name: "Gold",             builtInIndex: nil, stops: goldStops()),
-            PaletteOption(name: "Rose Gold",        builtInIndex: nil, stops: roseGoldStops()),
-            PaletteOption(name: "Steel",            builtInIndex: nil, stops: steelStops()),
-            PaletteOption(name: "Bronze",           builtInIndex: nil, stops: bronzeStops()),
-            PaletteOption(name: "Copper",           builtInIndex: nil, stops: copperStops()),
-            PaletteOption(name: "Titanium",         builtInIndex: nil, stops: titaniumStops()),
-            PaletteOption(name: "Mercury",          builtInIndex: nil, stops: mercuryStops()),
-            PaletteOption(name: "Pewter",           builtInIndex: nil, stops: pewterStops()),
-            PaletteOption(name: "Iridescent",       builtInIndex: nil, stops: iridescentStops()),
+            // ——— Metallic / Shiny ———
+            .init(name: "Metallic Silver", builtInIndex: nil, stopsHex: [
+                (0.00, "#0D0D0D"), (0.10, "#4D4D4D"), (0.22, "#D9D9D9"),
+                (0.35, "#595959"), (0.50, "#EBEBEB"), (0.65, "#666666"),
+                (0.78, "#E0E0E0"), (1.00, "#262626")
+            ]),
+            .init(name: "Chrome", builtInIndex: nil, stopsHex: [
+                (0.00, "#050505"), (0.08, "#404040"), (0.16, "#F2F2F2"),
+                (0.24, "#333333"), (0.32, "#FAFAFA"), (0.46, "#2E2E2E"),
+                (0.64, "#F0F0F0"), (1.00, "#1A1A1A")
+            ]),
+            .init(name: "Gold", builtInIndex: nil, stopsHex: [
+                (0.00, "#1A1100"), (0.15, "#8C5F00"), (0.35, "#F2C200"),
+                (0.55, "#FFE44D"), (0.75, "#CC990D"), (1.00, "#332200")
+            ]),
+            .init(name: "Copper", builtInIndex: nil, stopsHex: [
+                (0.00, "#120400"), (0.20, "#8C330D"), (0.45, "#E67326"),
+                (0.65, "#B3471A"), (0.85, "#FFC299"), (1.00, "#331400")
+            ]),
+            .init(name: "Iridescent", builtInIndex: nil, stopsHex: [
+                (0.00, "#190033"), (0.15, "#00A5CC"), (0.30, "#9933FF"),
+                (0.50, "#FF66E6"), (0.70, "#19E6A8"), (1.00, "#F2F2F2")
+            ]),
 
-            // ——— Scientific / Utility LUTs ———
-            PaletteOption(name: "Magma",            builtInIndex: nil, stops: magmaStops()),
-            PaletteOption(name: "Inferno",          builtInIndex: nil, stops: infernoStops()),
-            PaletteOption(name: "Plasma",           builtInIndex: nil, stops: plasmaStops()),
-            PaletteOption(name: "Viridis",          builtInIndex: nil, stops: viridisStops()),
-            PaletteOption(name: "Turbo",            builtInIndex: nil, stops: turboStops()),
-            PaletteOption(name: "Cubehelix",        builtInIndex: nil, stops: cubehelixStops()),
-            PaletteOption(name: "Grayscale",        builtInIndex: nil, stops: grayscaleStops()),
+            // ——— Scientific / Utility (perceptually uniform-ish) ———
+            .init(name: "Magma", builtInIndex: nil, stopsHex: [
+                (0.00, "#010004"), (0.25, "#17063C"), (0.50, "#5A1C50"),
+                (0.75, "#B93C32"), (1.00, "#FCEFAF")
+            ]),
+            .init(name: "Inferno", builtInIndex: nil, stopsHex: [
+                (0.00, "#010003"), (0.25, "#1A0533"), (0.50, "#971F35"),
+                (0.75, "#F28721"), (1.00, "#FCFFA5")
+            ]),
+            .init(name: "Plasma", builtInIndex: nil, stopsHex: [
+                (0.00, "#0D0887"), (0.25, "#7E03A8"), (0.50, "#CC4778"),
+                (0.75, "#F89540"), (1.00, "#F0F921")
+            ]),
+            .init(name: "Viridis", builtInIndex: nil, stopsHex: [
+                (0.00, "#440154"), (0.25, "#414487"), (0.50, "#2A788E"),
+                (0.75, "#22A884"), (1.00, "#FDE725")
+            ]),
+            .init(name: "Turbo", builtInIndex: nil, stopsHex: [
+                (0.00, "#23171B"), (0.25, "#37A2FF"), (0.50, "#7FE029"),
+                (0.75, "#F3C200"), (1.00, "#7F0E00")
+            ]),
+            .init(name: "Grayscale", builtInIndex: nil, stopsHex: [
+                (0.00, "#000000"), (1.00, "#FFFFFF")
+            ]),
 
-            // ——— Natural / Classic LUTs ———
-            PaletteOption(name: "Sunset",           builtInIndex: nil, stops: sunsetStops()),
-            PaletteOption(name: "Pastel",           builtInIndex: nil, stops: pastelStops()),
-            PaletteOption(name: "Aurora",           builtInIndex: nil, stops: auroraStops()),
-            PaletteOption(name: "Rainbow Smooth",   builtInIndex: nil, stops: rainbowSmoothStops()),
-            PaletteOption(name: "Earth",            builtInIndex: nil, stops: earthStops()),
-            PaletteOption(name: "Forest",           builtInIndex: nil, stops: forestStops()),
-            PaletteOption(name: "Ice",              builtInIndex: nil, stops: iceStops()),
-            PaletteOption(name: "Topo",             builtInIndex: nil, stops: topoStops()),
+            // ——— Natural / Classic ———
+            .init(name: "Sunset", builtInIndex: nil, stopsHex: [
+                (0.00, "#241A05"), (0.20, "#5A0835"), (0.40, "#B31A4D"),
+                (0.65, "#FA6633"), (0.85, "#FFD280"), (1.00, "#FFF2B3")
+            ]),
+            .init(name: "Aurora", builtInIndex: nil, stopsHex: [
+                (0.00, "#05081A"), (0.25, "#00664D"), (0.50, "#19BF8C"),
+                (0.75, "#66D9F2"), (1.00, "#DAF5FF")
+            ]),
+            .init(name: "Rainbow Smooth", builtInIndex: nil, stopsHex: [
+                (0.00, "#FF0000"), (0.17, "#FF7F00"), (0.33, "#FFFF00"),
+                (0.50, "#00FF00"), (0.67, "#0000FF"), (0.83, "#7F00FF"),
+                (1.00, "#FF0000")
+            ]),
 
-            // ——— Gem / Extra Vivid LUTs ———
-            PaletteOption(name: "Sapphire",         builtInIndex: nil, stops: sapphireStops()),
-            PaletteOption(name: "Emerald",          builtInIndex: nil, stops: emeraldStops()),
-            PaletteOption(name: "Ruby",             builtInIndex: nil, stops: rubyStops()),
-            PaletteOption(name: "Amethyst",         builtInIndex: nil, stops: amethystStops()),
-            PaletteOption(name: "Citrine",          builtInIndex: nil, stops: citrineStops()),
-            PaletteOption(name: "Jade",             builtInIndex: nil, stops: jadeStops()),
-            PaletteOption(name: "Coral",            builtInIndex: nil, stops: coralStops()),
-            PaletteOption(name: "Midnight",         builtInIndex: nil, stops: midnightStops()),
-            PaletteOption(name: "Solar Flare",      builtInIndex: nil, stops: solarFlareStops()),
-            PaletteOption(name: "Glacier",          builtInIndex: nil, stops: glacierStops()),
+            // ——— Gem / Extra Vivid ———
+            .init(name: "Sapphire", builtInIndex: nil, stopsHex: [
+                (0.00, "#00061A"), (0.20, "#003399"), (0.45, "#1A73FF"),
+                (0.75, "#99C2FF"), (1.00, "#FFFFFF")
+            ]),
+            .init(name: "Emerald", builtInIndex: nil, stopsHex: [
+                (0.00, "#00140A"), (0.20, "#005C30"), (0.45, "#00BF66"),
+                (0.75, "#80FFBF"), (1.00, "#FFFFFF")
+            ]),
+            .init(name: "Ruby", builtInIndex: nil, stopsHex: [
+                (0.00, "#140003"), (0.22, "#800033"), (0.46, "#E60040"),
+                (0.72, "#FF8099"), (1.00, "#FFFFFF")
+            ]),
+            .init(name: "Amethyst", builtInIndex: nil, stopsHex: [
+                (0.00, "#0B0015"), (0.25, "#4D0099"), (0.50, "#B366FF"),
+                (0.80, "#E6CCFF"), (1.00, "#FFFFFF")
+            ]),
+            .init(name: "Citrine", builtInIndex: nil, stopsHex: [
+                (0.00, "#1A1000"), (0.22, "#B37300"), (0.46, "#FFD11A"),
+                (0.72, "#FFF099"), (1.00, "#FFFFFF")
+            ]),
+            .init(name: "Jade", builtInIndex: nil, stopsHex: [
+                (0.00, "#00130F"), (0.26, "#00594D"), (0.52, "#00D4A6"),
+                (0.78, "#80FFE6"), (1.00, "#FFFFFF")
+            ]),
+            .init(name: "Coral", builtInIndex: nil, stopsHex: [
+                (0.00, "#1A0505"), (0.20, "#D94D40"), (0.45, "#FF8C73"),
+                (0.75, "#FFE0B3"), (1.00, "#FFFFFF")
+            ]),
+            .init(name: "Midnight", builtInIndex: nil, stopsHex: [
+                (0.00, "#000005"), (0.25, "#000826"), (0.50, "#003373"),
+                (0.75, "#3373D9"), (1.00, "#FFFFFF")
+            ]),
+            .init(name: "Solar Flare", builtInIndex: nil, stopsHex: [
+                (0.00, "#0D0500"), (0.22, "#BF4D00"), (0.44, "#FFB300"),
+                (0.70, "#FFE680"), (1.00, "#FFFFFF")
+            ]),
+            .init(name: "Glacier", builtInIndex: nil, stopsHex: [
+                (0.00, "#00050D"), (0.20, "#004D99"), (0.45, "#73CCFF"),
+                (0.75, "#D9F2FF"), (1.00, "#FFFFFF")
+            ]),
 
-            // ——— GPU Built‑ins (match shader indices) ———
-            PaletteOption(name: "HSV",   builtInIndex: 0, stops: hsvStops()),
-            PaletteOption(name: "Fire",  builtInIndex: 1, stops: fireStops()),
-            PaletteOption(name: "Ocean", builtInIndex: 2, stops: oceanStops())
+            // ——— GPU Built-ins (shader indices) ———
+            .init(name: "HSV",   builtInIndex: 0, stopsHex: [
+                (0.00, "#FF0000"), (0.17, "#FFFF00"), (0.33, "#00FF00"),
+                (0.50, "#00FFFF"), (0.67, "#0000FF"), (0.83, "#FF00FF"),
+                (1.00, "#FF0000")
+            ]),
+            .init(name: "Fire",  builtInIndex: 1, stopsHex: [
+                (0.00, "#000000"), (0.15, "#FF0000"), (0.50, "#FF7F00"),
+                (0.85, "#FFFF00"), (1.00, "#FFFFFF")
+            ]),
+            .init(name: "Ocean", builtInIndex: 2, stopsHex: [
+                (0.00, "#000000"), (0.15, "#0033FF"), (0.45, "#1AB3B3"),
+                (0.75, "#00FFFF"), (1.00, "#FFFFFF")
+            ])
         ]
+
+        return paletteData.map { item in
+            PaletteOption(name: item.name, builtInIndex: item.builtInIndex, stops: makeStops(from: item.stopsHex))
+        }
     }
 
     private func palettePreview(for name: String) -> some View {
@@ -435,394 +557,6 @@ struct ContentView: View {
         ctx.drawLinearGradient(grad, start: CGPoint(x: 0, y: 0), end: CGPoint(x: w, y: 0), options: [])
         guard let cg = ctx.makeImage() else { return nil }
         return UIImage(cgImage: cg)
-    }
-
-    // Palette stop generators
-    private func hsvStops() -> [(CGFloat, UIColor)] {
-        [ (0.00, .red), (0.17, .yellow), (0.33, .green), (0.50, .cyan), (0.67, .blue), (0.83, .magenta), (1.00, .red) ]
-    }
-    private func fireStops() -> [(CGFloat, UIColor)] {
-        [ (0.00, .black), (0.15, .red), (0.50, .orange), (0.85, .yellow), (1.00, .white) ]
-    }
-    private func oceanStops() -> [(CGFloat, UIColor)] {
-        [ (0.00, .black), (0.15, .blue), (0.45, .systemTeal), (0.75, .cyan), (1.00, .white) ]
-    }
-    private func magmaStops() -> [(CGFloat, UIColor)] {
-        [ (0.00, UIColor(red:0.001, green:0.000, blue:0.015, alpha:1)),
-          (0.25, UIColor(red:0.090, green:0.022, blue:0.147, alpha:1)),
-          (0.50, UIColor(red:0.355, green:0.110, blue:0.312, alpha:1)),
-          (0.75, UIColor(red:0.722, green:0.235, blue:0.196, alpha:1)),
-          (1.00, UIColor(red:0.987, green:0.940, blue:0.749, alpha:1)) ]
-    }
-    private func infernoStops() -> [(CGFloat, UIColor)] {
-        [ (0.00, UIColor(red:0.001, green:0.000, blue:0.013, alpha:1)),
-          (0.25, UIColor(red:0.102, green:0.019, blue:0.201, alpha:1)),
-          (0.50, UIColor(red:0.591, green:0.125, blue:0.208, alpha:1)),
-          (0.75, UIColor(red:0.949, green:0.526, blue:0.132, alpha:1)),
-          (1.00, UIColor(red:0.988, green:0.998, blue:0.645, alpha:1)) ]
-    }
-    private func plasmaStops() -> [(CGFloat, UIColor)] {
-        [ (0.00, UIColor(red:0.050, green:0.030, blue:0.527, alpha:1)),
-          (0.25, UIColor(red:0.541, green:0.016, blue:0.670, alpha:1)),
-          (0.50, UIColor(red:0.884, green:0.206, blue:0.380, alpha:1)),
-          (0.75, UIColor(red:0.993, green:0.666, blue:0.237, alpha:1)),
-          (1.00, UIColor(red:0.940, green:0.975, blue:0.131, alpha:1)) ]
-    }
-    private func viridisStops() -> [(CGFloat, UIColor)] {
-        [ (0.00, UIColor(red:0.267, green:0.005, blue:0.329, alpha:1)),
-          (0.25, UIColor(red:0.283, green:0.141, blue:0.458, alpha:1)),
-          (0.50, UIColor(red:0.254, green:0.265, blue:0.530, alpha:1)),
-          (0.75, UIColor(red:0.127, green:0.566, blue:0.550, alpha:1)),
-          (1.00, UIColor(red:0.993, green:0.904, blue:0.144, alpha:1)) ]
-    }
-    private func turboStops() -> [(CGFloat, UIColor)] {
-        [ (0.00, UIColor(red:0.189, green:0.071, blue:0.232, alpha:1)),
-          (0.25, UIColor(red:0.216, green:0.460, blue:0.996, alpha:1)),
-          (0.50, UIColor(red:0.500, green:0.891, blue:0.158, alpha:1)),
-          (0.75, UIColor(red:0.994, green:0.760, blue:0.000, alpha:1)),
-          (1.00, UIColor(red:0.498, green:0.054, blue:0.000, alpha:1)) ]
-    }
-    private func cubehelixStops() -> [(CGFloat, UIColor)] {
-        [ (0.00, .black), (0.25, .darkGray), (0.50, .systemGreen), (0.75, .systemPurple), (1.00, .white) ]
-    }
-    private func grayscaleStops() -> [(CGFloat, UIColor)] {
-        [ (0.00, .black), (1.00, .white) ]
-    }
-    private func sunsetStops() -> [(CGFloat, UIColor)] {
-        [ (0.00, UIColor(red:0.10, green:0.02, blue:0.20, alpha:1)),
-          (0.20, UIColor(red:0.35, green:0.02, blue:0.35, alpha:1)),
-          (0.40, UIColor(red:0.70, green:0.10, blue:0.30, alpha:1)),
-          (0.65, UIColor(red:0.98, green:0.40, blue:0.20, alpha:1)),
-          (0.85, UIColor(red:1.00, green:0.75, blue:0.30, alpha:1)),
-          (1.00, UIColor(red:1.00, green:0.95, blue:0.70, alpha:1)) ]
-    }
-    private func pastelStops() -> [(CGFloat, UIColor)] {
-        [ (0.00, UIColor(red:0.90, green:0.95, blue:1.00, alpha:1)),
-          (0.20, UIColor(red:0.86, green:0.92, blue:1.00, alpha:1)),
-          (0.40, UIColor(red:0.92, green:0.86, blue:0.98, alpha:1)),
-          (0.60, UIColor(red:0.98, green:0.88, blue:0.90, alpha:1)),
-          (0.80, UIColor(red:0.98, green:0.95, blue:0.84, alpha:1)),
-          (1.00, UIColor(red:0.90, green:0.98, blue:0.88, alpha:1)) ]
-    }
-    private func auroraStops() -> [(CGFloat, UIColor)] {
-        [ (0.00, UIColor(red:0.02, green:0.03, blue:0.10, alpha:1)),
-          (0.25, UIColor(red:0.00, green:0.40, blue:0.30, alpha:1)),
-          (0.50, UIColor(red:0.10, green:0.75, blue:0.55, alpha:1)),
-          (0.75, UIColor(red:0.40, green:0.85, blue:0.90, alpha:1)),
-          (1.00, UIColor(red:0.85, green:0.95, blue:1.00, alpha:1)) ]
-    }
-    private func rainbowSmoothStops() -> [(CGFloat, UIColor)] {
-        [ (0.00, .red), (0.17, .orange), (0.33, .yellow), (0.50, .green), (0.67, .blue), (0.83, .purple), (1.00, .red) ]
-    }
-    private func earthStops() -> [(CGFloat, UIColor)] {
-        [ (0.00, UIColor(red:0.14, green:0.08, blue:0.02, alpha:1)),
-          (0.20, UIColor(red:0.25, green:0.16, blue:0.05, alpha:1)),
-          (0.40, UIColor(red:0.38, green:0.26, blue:0.10, alpha:1)),
-          (0.60, UIColor(red:0.52, green:0.36, blue:0.16, alpha:1)),
-          (0.80, UIColor(red:0.70, green:0.55, blue:0.30, alpha:1)),
-          (1.00, UIColor(red:0.90, green:0.82, blue:0.60, alpha:1)) ]
-    }
-    private func forestStops() -> [(CGFloat, UIColor)] {
-        [ (0.00, UIColor(red:0.02, green:0.12, blue:0.02, alpha:1)),
-          (0.25, UIColor(red:0.05, green:0.28, blue:0.10, alpha:1)),
-          (0.50, UIColor(red:0.10, green:0.45, blue:0.18, alpha:1)),
-          (0.75, UIColor(red:0.25, green:0.60, blue:0.32, alpha:1)),
-          (1.00, UIColor(red:0.75, green:0.90, blue:0.70, alpha:1)) ]
-    }
-    private func iceStops() -> [(CGFloat, UIColor)] {
-        [ (0.00, UIColor(red:0.00, green:0.07, blue:0.15, alpha:1)),
-          (0.25, UIColor(red:0.10, green:0.34, blue:0.55, alpha:1)),
-          (0.50, UIColor(red:0.40, green:0.75, blue:0.90, alpha:1)),
-          (0.75, UIColor(red:0.75, green:0.92, blue:0.97, alpha:1)),
-          (1.00, UIColor(red:0.95, green:0.98, blue:1.00, alpha:1)) ]
-    }
-    private func topoStops() -> [(CGFloat, UIColor)] {
-        [ (0.00, UIColor(red:0.00, green:0.25, blue:0.50, alpha:1)),
-          (0.15, UIColor(red:0.10, green:0.50, blue:0.75, alpha:1)),
-          (0.30, UIColor(red:0.20, green:0.70, blue:0.40, alpha:1)),
-          (0.45, UIColor(red:0.45, green:0.70, blue:0.20, alpha:1)),
-          (0.60, UIColor(red:0.70, green:0.70, blue:0.40, alpha:1)),
-          (0.75, UIColor(red:0.75, green:0.55, blue:0.35, alpha:1)),
-          (0.90, UIColor(red:0.70, green:0.35, blue:0.30, alpha:1)),
-          (1.00, UIColor(red:0.95, green:0.95, blue:0.95, alpha:1)) ]
-    }
-
-    // --- New vivid palette stop generators ---
-    private func neonStops() -> [(CGFloat, UIColor)] {
-        [
-            (0.00, UIColor.black),
-            (0.08, UIColor(red:0.00, green:1.00, blue:0.70, alpha:1)),
-            (0.20, UIColor(red:0.00, green:0.80, blue:1.00, alpha:1)),
-            (0.35, UIColor(red:0.40, green:0.20, blue:1.00, alpha:1)),
-            (0.55, UIColor(red:1.00, green:0.10, blue:0.90, alpha:1)),
-            (0.75, UIColor(red:1.00, green:0.80, blue:0.10, alpha:1)),
-            (1.00, UIColor.white)
-        ]
-    }
-
-    private func vibrantStops() -> [(CGFloat, UIColor)] {
-        [
-            (0.00, UIColor(red:0.05, green:0.02, blue:0.15, alpha:1)),
-            (0.15, UIColor(red:0.20, green:0.00, blue:0.70, alpha:1)),
-            (0.35, UIColor(red:0.00, green:0.60, blue:1.00, alpha:1)),
-            (0.55, UIColor(red:0.00, green:0.90, blue:0.40, alpha:1)),
-            (0.75, UIColor(red:1.00, green:0.80, blue:0.00, alpha:1)),
-            (1.00, UIColor(red:1.00, green:0.15, blue:0.10, alpha:1))
-        ]
-    }
-
-    private func sunsetGlowStops() -> [(CGFloat, UIColor)] {
-        [
-            (0.00, UIColor(red:0.08, green:0.00, blue:0.15, alpha:1)),
-            (0.18, UIColor(red:0.40, green:0.00, blue:0.40, alpha:1)),
-            (0.38, UIColor(red:0.85, green:0.20, blue:0.40, alpha:1)),
-            (0.60, UIColor(red:1.00, green:0.54, blue:0.10, alpha:1)),
-            (0.82, UIColor(red:1.00, green:0.85, blue:0.25, alpha:1)),
-            (1.00, UIColor(red:1.00, green:0.98, blue:0.85, alpha:1))
-        ]
-    }
-
-    private func candyStops() -> [(CGFloat, UIColor)] {
-        [
-            (0.00, UIColor(red:0.10, green:0.00, blue:0.20, alpha:1)),
-            (0.20, UIColor(red:0.90, green:0.20, blue:0.75, alpha:1)),
-            (0.40, UIColor(red:1.00, green:0.40, blue:0.50, alpha:1)),
-            (0.60, UIColor(red:1.00, green:0.70, blue:0.30, alpha:1)),
-            (0.80, UIColor(red:0.90, green:0.95, blue:0.40, alpha:1)),
-            (1.00, UIColor(red:0.80, green:1.00, blue:0.95, alpha:1))
-        ]
-    }
-
-    private func auroraBorealisStops() -> [(CGFloat, UIColor)] {
-        [
-            (0.00, UIColor(red:0.00, green:0.02, blue:0.07, alpha:1)),
-            (0.18, UIColor(red:0.00, green:0.40, blue:0.35, alpha:1)),
-            (0.36, UIColor(red:0.00, green:0.75, blue:0.65, alpha:1)),
-            (0.58, UIColor(red:0.35, green:0.95, blue:0.90, alpha:1)),
-            (0.78, UIColor(red:0.60, green:0.85, blue:1.00, alpha:1)),
-            (1.00, UIColor(red:0.92, green:0.98, blue:1.00, alpha:1))
-        ]
-    }
-
-    private func tropicalStopsNew() -> [(CGFloat, UIColor)] { // renamed to avoid collision with existing helper
-        [
-            (0.00, UIColor(red:0.00, green:0.10, blue:0.22, alpha:1)),
-            (0.20, UIColor(red:0.00, green:0.55, blue:0.60, alpha:1)),
-            (0.40, UIColor(red:0.00, green:0.85, blue:0.60, alpha:1)),
-            (0.60, UIColor(red:0.95, green:0.80, blue:0.00, alpha:1)),
-            (0.80, UIColor(red:1.00, green:0.50, blue:0.00, alpha:1)),
-            (1.00, UIColor(red:0.90, green:0.10, blue:0.00, alpha:1))
-        ]
-    }
-
-    private func flamingoStopsNew() -> [(CGFloat, UIColor)] { // renamed to avoid collision
-        [
-            (0.00, UIColor(red:0.18, green:0.02, blue:0.20, alpha:1)),
-            (0.22, UIColor(red:0.80, green:0.10, blue:0.50, alpha:1)),
-            (0.44, UIColor(red:1.00, green:0.40, blue:0.70, alpha:1)),
-            (0.66, UIColor(red:1.00, green:0.70, blue:0.75, alpha:1)),
-            (0.88, UIColor(red:1.00, green:0.90, blue:0.90, alpha:1)),
-            (1.00, UIColor.white)
-        ]
-    }
-
-    private func lagoonStopsNew() -> [(CGFloat, UIColor)] { // renamed to avoid collision
-        [
-            (0.00, UIColor(red:0.00, green:0.04, blue:0.10, alpha:1)),
-            (0.18, UIColor(red:0.00, green:0.30, blue:0.60, alpha:1)),
-            (0.36, UIColor(red:0.00, green:0.62, blue:0.80, alpha:1)),
-            (0.62, UIColor(red:0.00, green:0.85, blue:0.75, alpha:1)),
-            (0.82, UIColor(red:0.50, green:0.98, blue:0.90, alpha:1)),
-            (1.00, UIColor.white)
-        ]
-    }
-
-    private func cyberpunkStops() -> [(CGFloat, UIColor)] {
-        [
-            (0.00, UIColor(red:0.04, green:0.00, blue:0.08, alpha:1)),
-            (0.20, UIColor(red:0.12, green:0.00, blue:0.55, alpha:1)),
-            (0.40, UIColor(red:0.55, green:0.00, blue:0.85, alpha:1)),
-            (0.60, UIColor(red:0.00, green:0.90, blue:0.95, alpha:1)),
-            (0.80, UIColor(red:1.00, green:0.20, blue:0.60, alpha:1)),
-            (1.00, UIColor(red:1.00, green:0.95, blue:0.90, alpha:1))
-        ]
-    }
-
-    private func lavaStops() -> [(CGFloat, UIColor)] {
-        [
-            (0.00, UIColor.black),
-            (0.18, UIColor(red:0.25, green:0.00, blue:0.00, alpha:1)),
-            (0.38, UIColor(red:0.65, green:0.00, blue:0.00, alpha:1)),
-            (0.58, UIColor(red:1.00, green:0.30, blue:0.00, alpha:1)),
-            (0.78, UIColor(red:1.00, green:0.70, blue:0.00, alpha:1)),
-            (1.00, UIColor.white)
-        ]
-    }
-
-    // ——— Metallic / Shiny ———
-    private func metallicSilverStops() -> [(CGFloat, UIColor)] {
-        [ (0.00, UIColor(white:0.05, alpha:1)),
-          (0.10, UIColor(white:0.30, alpha:1)),
-          (0.22, UIColor(white:0.85, alpha:1)),
-          (0.35, UIColor(white:0.35, alpha:1)),
-          (0.50, UIColor(white:0.92, alpha:1)),
-          (0.65, UIColor(white:0.40, alpha:1)),
-          (0.78, UIColor(white:0.88, alpha:1)),
-          (1.00, UIColor(white:0.15, alpha:1)) ]
-    }
-    private func chromeStops() -> [(CGFloat, UIColor)] {
-        [ (0.00, UIColor(white:0.02, alpha:1)),
-          (0.08, UIColor(white:0.25, alpha:1)),
-          (0.16, UIColor(white:0.95, alpha:1)),
-          (0.24, UIColor(white:0.20, alpha:1)),
-          (0.32, UIColor(white:0.98, alpha:1)),
-          (0.46, UIColor(white:0.18, alpha:1)),
-          (0.64, UIColor(white:0.96, alpha:1)),
-          (1.00, UIColor(white:0.10, alpha:1)) ]
-    }
-    private func goldStops() -> [(CGFloat, UIColor)] {
-        [ (0.00, UIColor(red:0.10, green:0.07, blue:0.00, alpha:1)),
-          (0.15, UIColor(red:0.55, green:0.38, blue:0.00, alpha:1)),
-          (0.35, UIColor(red:0.95, green:0.78, blue:0.10, alpha:1)),
-          (0.55, UIColor(red:1.00, green:0.88, blue:0.25, alpha:1)),
-          (0.75, UIColor(red:0.80, green:0.60, blue:0.05, alpha:1)),
-          (1.00, UIColor(red:0.20, green:0.15, blue:0.00, alpha:1)) ]
-    }
-    private func roseGoldStops() -> [(CGFloat, UIColor)] {
-        [ (0.00, UIColor(red:0.14, green:0.05, blue:0.05, alpha:1)),
-          (0.20, UIColor(red:0.60, green:0.30, blue:0.25, alpha:1)),
-          (0.40, UIColor(red:0.95, green:0.65, blue:0.55, alpha:1)),
-          (0.60, UIColor(red:1.00, green:0.80, blue:0.70, alpha:1)),
-          (0.80, UIColor(red:0.70, green:0.40, blue:0.35, alpha:1)),
-          (1.00, UIColor(red:0.18, green:0.08, blue:0.08, alpha:1)) ]
-    }
-    private func steelStops() -> [(CGFloat, UIColor)] {
-        [ (0.00, UIColor(white:0.05, alpha:1)),
-          (0.20, UIColor(white:0.25, alpha:1)),
-          (0.45, UIColor(white:0.70, alpha:1)),
-          (0.65, UIColor(white:0.35, alpha:1)),
-          (0.85, UIColor(white:0.80, alpha:1)),
-          (1.00, UIColor(white:0.12, alpha:1)) ]
-    }
-    private func bronzeStops() -> [(CGFloat, UIColor)] {
-        [ (0.00, UIColor(red:0.05, green:0.02, blue:0.00, alpha:1)),
-          (0.20, UIColor(red:0.40, green:0.20, blue:0.05, alpha:1)),
-          (0.45, UIColor(red:0.70, green:0.45, blue:0.15, alpha:1)),
-          (0.70, UIColor(red:0.48, green:0.28, blue:0.10, alpha:1)),
-          (0.90, UIColor(red:0.85, green:0.65, blue:0.35, alpha:1)),
-          (1.00, UIColor(red:0.15, green:0.08, blue:0.03, alpha:1)) ]
-    }
-    private func copperStops() -> [(CGFloat, UIColor)] {
-        [ (0.00, UIColor(red:0.07, green:0.02, blue:0.00, alpha:1)),
-          (0.20, UIColor(red:0.55, green:0.20, blue:0.05, alpha:1)),
-          (0.45, UIColor(red:0.90, green:0.45, blue:0.15, alpha:1)),
-          (0.65, UIColor(red:0.70, green:0.30, blue:0.10, alpha:1)),
-          (0.85, UIColor(red:1.00, green:0.70, blue:0.45, alpha:1)),
-          (1.00, UIColor(red:0.20, green:0.08, blue:0.03, alpha:1)) ]
-    }
-    private func titaniumStops() -> [(CGFloat, UIColor)] {
-        [ (0.00, UIColor(white:0.07, alpha:1)),
-          (0.18, UIColor(white:0.25, alpha:1)),
-          (0.36, UIColor(white:0.85, alpha:1)),
-          (0.54, UIColor(white:0.30, alpha:1)),
-          (0.72, UIColor(white:0.90, alpha:1)),
-          (1.00, UIColor(white:0.10, alpha:1)) ]
-    }
-    private func mercuryStops() -> [(CGFloat, UIColor)] {
-        [ (0.00, UIColor(white:0.03, alpha:1)),
-          (0.16, UIColor(white:0.25, alpha:1)),
-          (0.33, UIColor(white:0.98, alpha:1)),
-          (0.50, UIColor(white:0.20, alpha:1)),
-          (0.66, UIColor(white:0.96, alpha:1)),
-          (1.00, UIColor(white:0.08, alpha:1)) ]
-    }
-    private func pewterStops() -> [(CGFloat, UIColor)] {
-        [ (0.00, UIColor(white:0.06, alpha:1)),
-          (0.25, UIColor(white:0.22, alpha:1)),
-          (0.55, UIColor(white:0.65, alpha:1)),
-          (0.75, UIColor(white:0.32, alpha:1)),
-          (0.92, UIColor(white:0.78, alpha:1)),
-          (1.00, UIColor(white:0.14, alpha:1)) ]
-    }
-    private func iridescentStops() -> [(CGFloat, UIColor)] {
-        [ (0.00, UIColor(red:0.10, green:0.00, blue:0.20, alpha:1)),
-          (0.15, UIColor(red:0.00, green:0.65, blue:0.80, alpha:1)),
-          (0.30, UIColor(red:0.60, green:0.20, blue:1.00, alpha:1)),
-          (0.50, UIColor(red:1.00, green:0.40, blue:0.90, alpha:1)),
-          (0.70, UIColor(red:0.10, green:0.90, blue:0.60, alpha:1)),
-          (1.00, UIColor(red:0.95, green:0.95, blue:0.95, alpha:1)) ]
-    }
-
-    // ——— Gem / Extra Vivid ———
-    private func sapphireStops() -> [(CGFloat, UIColor)] {
-        [ (0.00, UIColor(red:0.00, green:0.02, blue:0.10, alpha:1)),
-          (0.20, UIColor(red:0.00, green:0.20, blue:0.60, alpha:1)),
-          (0.45, UIColor(red:0.10, green:0.45, blue:0.95, alpha:1)),
-          (0.75, UIColor(red:0.60, green:0.85, blue:1.00, alpha:1)),
-          (1.00, UIColor.white) ]
-    }
-    private func emeraldStops() -> [(CGFloat, UIColor)] {
-        [ (0.00, UIColor(red:0.00, green:0.05, blue:0.02, alpha:1)),
-          (0.20, UIColor(red:0.00, green:0.35, blue:0.18, alpha:1)),
-          (0.45, UIColor(red:0.00, green:0.75, blue:0.40, alpha:1)),
-          (0.75, UIColor(red:0.50, green:1.00, blue:0.75, alpha:1)),
-          (1.00, UIColor.white) ]
-    }
-    private func rubyStops() -> [(CGFloat, UIColor)] {
-        [ (0.00, UIColor(red:0.05, green:0.00, blue:0.02, alpha:1)),
-          (0.22, UIColor(red:0.50, green:0.00, blue:0.20, alpha:1)),
-          (0.46, UIColor(red:0.90, green:0.05, blue:0.25, alpha:1)),
-          (0.72, UIColor(red:1.00, green:0.50, blue:0.60, alpha:1)),
-          (1.00, UIColor.white) ]
-    }
-    private func amethystStops() -> [(CGFloat, UIColor)] {
-        [ (0.00, UIColor(red:0.04, green:0.00, blue:0.08, alpha:1)),
-          (0.25, UIColor(red:0.30, green:0.00, blue:0.60, alpha:1)),
-          (0.50, UIColor(red:0.70, green:0.25, blue:1.00, alpha:1)),
-          (0.80, UIColor(red:0.90, green:0.70, blue:1.00, alpha:1)),
-          (1.00, UIColor.white) ]
-    }
-    private func citrineStops() -> [(CGFloat, UIColor)] {
-        [ (0.00, UIColor(red:0.10, green:0.06, blue:0.00, alpha:1)),
-          (0.22, UIColor(red:0.70, green:0.45, blue:0.00, alpha:1)),
-          (0.46, UIColor(red:1.00, green:0.85, blue:0.10, alpha:1)),
-          (0.72, UIColor(red:1.00, green:0.95, blue:0.60, alpha:1)),
-          (1.00, UIColor.white) ]
-    }
-    private func jadeStops() -> [(CGFloat, UIColor)] {
-        [ (0.00, UIColor(red:0.00, green:0.06, blue:0.04, alpha:1)),
-          (0.26, UIColor(red:0.00, green:0.35, blue:0.30, alpha:1)),
-          (0.52, UIColor(red:0.00, green:0.85, blue:0.65, alpha:1)),
-          (0.78, UIColor(red:0.50, green:1.00, blue:0.90, alpha:1)),
-          (1.00, UIColor.white) ]
-    }
-    private func coralStops() -> [(CGFloat, UIColor)] {
-        [ (0.00, UIColor(red:0.10, green:0.02, blue:0.02, alpha:1)),
-          (0.20, UIColor(red:0.85, green:0.25, blue:0.25, alpha:1)),
-          (0.45, UIColor(red:1.00, green:0.55, blue:0.45, alpha:1)),
-          (0.75, UIColor(red:1.00, green:0.85, blue:0.70, alpha:1)),
-          (1.00, UIColor.white) ]
-    }
-    private func midnightStops() -> [(CGFloat, UIColor)] {
-        [ (0.00, UIColor(red:0.00, green:0.00, blue:0.02, alpha:1)),
-          (0.25, UIColor(red:0.00, green:0.02, blue:0.15, alpha:1)),
-          (0.50, UIColor(red:0.00, green:0.20, blue:0.45, alpha:1)),
-          (0.75, UIColor(red:0.20, green:0.45, blue:0.85, alpha:1)),
-          (1.00, UIColor.white) ]
-    }
-    private func solarFlareStops() -> [(CGFloat, UIColor)] {
-        [ (0.00, UIColor(red:0.05, green:0.02, blue:0.00, alpha:1)),
-          (0.22, UIColor(red:0.75, green:0.30, blue:0.00, alpha:1)),
-          (0.44, UIColor(red:1.00, green:0.70, blue:0.00, alpha:1)),
-          (0.70, UIColor(red:1.00, green:0.90, blue:0.40, alpha:1)),
-          (1.00, UIColor.white) ]
-    }
-    private func glacierStops() -> [(CGFloat, UIColor)] {
-        [ (0.00, UIColor(red:0.00, green:0.02, blue:0.05, alpha:1)),
-          (0.20, UIColor(red:0.00, green:0.30, blue:0.60, alpha:1)),
-          (0.45, UIColor(red:0.45, green:0.80, blue:1.00, alpha:1)),
-          (0.75, UIColor(red:0.85, green:0.95, blue:1.00, alpha:1)),
-          (1.00, UIColor.white) ]
     }
 
     @ViewBuilder
@@ -1445,4 +1179,7 @@ final class PhotoSaver {
         }
     }
 }
+
+
+
 
