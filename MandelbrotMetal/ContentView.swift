@@ -22,6 +22,8 @@ struct ContentView: View {
     @State private var palette = 0 // 0=HSV, 1=Fire, 2=Ocean
     @State private var gradientItem: PhotosPickerItem? = nil
     @State private var showPalettePicker = false
+    @State private var ditheringEnabled = false
+    @State private var showGradientEditor = false
     @State private var currentPaletteName: String = "HSV" // tracks UI label for palette
     @State private var snapshotImage: UIImage? = nil
     @State private var showShare = false
@@ -58,6 +60,7 @@ struct ContentView: View {
     @State private var highQualityIdleRender: Bool = true
     @State private var isInteracting: Bool = false
     private let kHQIdleKey = "hq_idle_render_v1"
+    @State private var contrast: Double = 1.0  // neutral
     
     var body: some View {
         NavigationStack { GeometryReader { geo in
@@ -114,12 +117,15 @@ struct ContentView: View {
                 if let s = vm.loadState() {
                     // Deep Zoom is always on now; ignore saved flag
                     palette = s.palette
+                    contrast = s.contrast
                 }
                 vm.pushViewport(currentPointsSize(geo.size), screenScale: currentScreenScale())
                 vm.requestDraw()
                 vm.renderer?.setDeepZoom(true)
                 vm.renderer?.setHighQualityIdle(highQualityIdleRender)
                 vm.renderer?.setInteractive(false, baseIterations: vm.maxIterations)
+                // Apply restored contrast to renderer after loading state
+                vm.renderer?.setContrast(Float(contrast))
 
                 // Restore palette by saved name if available; otherwise fall back to index
                 if let savedName = UserDefaults.standard.string(forKey: kPaletteNameKey),
@@ -144,6 +150,10 @@ struct ContentView: View {
                     }
                 }
             }
+            .onChange(of: contrast) { _, newVal in
+                vm.renderer?.setContrast(Float(newVal))
+                vm.saveState(perturb: false, deep: true, palette: palette, contrast: newVal)
+            }
             .onDisappear {
                 if let obs = fallbackObserver {
                     NotificationCenter.default.removeObserver(obs)
@@ -163,7 +173,9 @@ struct ContentView: View {
                     vm.requestDraw()
                 }
             }
-            .onChange(of: palette) { persistPaletteSelection() }
+            .onChange(of: palette) { _, _ in
+                persistPaletteSelection()
+            }
             .onChange(of: highQualityIdleRender) { _, newValue in
                 UserDefaults.standard.set(newValue, forKey: kHQIdleKey)
                 vm.renderer?.setHighQualityIdle(newValue)
@@ -180,9 +192,15 @@ struct ContentView: View {
                 vm.requestDraw()
             }
             .onChange(of: currentPaletteName) { _, _ in persistPaletteSelection() }
-            .onChange(of: vm.center)               { vm.saveState(perturb: false, deep: true, palette: palette) }
-            .onChange(of: vm.scalePixelsPerUnit)   { vm.saveState(perturb: false, deep: true, palette: palette) }
-            .onChange(of: vm.maxIterations)        { vm.saveState(perturb: false, deep: true, palette: palette) }
+            .onChange(of: vm.center) { _, _ in
+                vm.saveState(perturb: false, deep: true, palette: palette, contrast: contrast)
+            }
+            .onChange(of: vm.scalePixelsPerUnit) { _, _ in
+                vm.saveState(perturb: false, deep: true, palette: palette, contrast: contrast)
+            }
+            .onChange(of: vm.maxIterations) { _, _ in
+                vm.saveState(perturb: false, deep: true, palette: palette, contrast: contrast)
+            }
             .onChange(of: scenePhase) { _, newPhase in
                 if newPhase == .background {
                     persistPaletteSelection()
@@ -307,7 +325,7 @@ private func optionsSheet() -> some View {
     
     private func persistPaletteSelection() {
         UserDefaults.standard.set(currentPaletteName, forKey: kPaletteNameKey)
-        vm.saveState(perturb: false, deep: true, palette: palette)
+        vm.saveState(perturb: false, deep: true, palette: palette, contrast: contrast)
     }
 
     private func currentScreenScale() -> CGFloat {
@@ -565,6 +583,13 @@ private func optionsSheet() -> some View {
                         ))
                     } label: {
                         Label("Color", systemImage: "paintpalette")
+                    }
+                    HStack {
+                        Text("Contrast")
+                        Slider(value: $contrast, in: 0.5...1.5, step: 0.01)
+                            .frame(width: 160) // keep it narrow so it won’t wrap
+                        Text(String(format: "%.2f", contrast))
+                            .font(.caption).foregroundStyle(.secondary)
                     }
 
                     PhotosPicker(selection: $gradientItem, matching: .images) {

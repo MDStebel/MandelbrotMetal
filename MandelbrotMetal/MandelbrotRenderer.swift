@@ -30,6 +30,8 @@ struct MandelbrotUniforms {
     var palette: Int32           // 0=HSV, 1=Fire, 2=Ocean, 3=LUT
     var deepMode: Int32          // 0/1
     var _pad0: Int32             // keep 16B alignment
+    
+    var contrast: Float = 1.0    // contrast shaping for normalized t (1.0 = neutral)
 
     // Double-single mapping splits
     var originHi: SIMD2<Float>
@@ -76,7 +78,10 @@ final class MandelbrotRenderer: NSObject, MTKViewDelegate {
 
     private var uniforms = MandelbrotUniforms(
         origin: .zero,
-        step: .init(0.005, 0.005),
+        step: .init(
+            0.005,
+            0.005
+        ),
         maxIt: 500,
         size: .zero,
         pixelStep: 1,
@@ -84,6 +89,7 @@ final class MandelbrotRenderer: NSObject, MTKViewDelegate {
         palette: 0,
         deepMode: 0,
         _pad0: 0,
+        contrast: 1.0,
         originHi: .zero,
         originLo: .zero,
         stepHi: .zero,
@@ -171,6 +177,13 @@ final class MandelbrotRenderer: NSObject, MTKViewDelegate {
         }
         needsRender = true
         DispatchQueue.main.async { [weak self] in self?.mtkViewRef?.setNeedsDisplay() }
+    }
+    
+    func setContrast(_ value: Float) {
+        // avoid divide-by-zero in kernel; 1.0 = neutral
+        uniforms.contrast = max(0.01, value)
+        needsRender = true
+        mtkViewRef?.setNeedsDisplay()
     }
 
     func setPalette(_ mode: Int) {

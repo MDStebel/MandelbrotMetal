@@ -162,7 +162,185 @@ final class PaletteCatalog {
             ]),
             .init(name: "Ocean", builtInIndex: 2, stopsHex: [
                 (0.00, "#000000"), (0.15, "#0033FF"), (0.45, "#1AB3B3"), (0.75, "#00FFFF"), (1.00, "#FFFFFF")
-            ])
+            ]),
+            
+            PaletteItem(
+              name: "Vivid Neon",
+              builtInIndex: nil,
+              stopsHex: [
+                (0.00, "#000000"),
+                (0.12, "#0FF1CE"),
+                (0.25, "#00E5FF"),
+                (0.38, "#00FF85"),
+                (0.52, "#F9FF00"),
+                (0.66, "#FF9100"),
+                (0.80, "#FF006E"),
+                (0.94, "#8A2EFF"),
+                (1.00, "#000000")
+              ]
+            ),
+            
+            // ——— aVivid punchy (high contrast, clean ramps) ———
+
+            PaletteItem(
+              name: "Electric Sunset",
+              builtInIndex: nil,
+              stopsHex: [
+                (0.00, "#130019"),
+                (0.15, "#3B005B"),
+                (0.35, "#A5007A"),
+                (0.55, "#FF3D3D"),
+                (0.72, "#FFA600"),
+                (0.88, "#FFE600"),
+                (1.00, "#FFF8E1")
+              ]
+            ),
+
+            PaletteItem(
+              name: "Tropical Punch",
+              builtInIndex: nil,
+              stopsHex: [
+                (0.00, "#031A1A"),
+                (0.18, "#006C67"),
+                (0.36, "#00BFB2"),
+                (0.54, "#F4D35E"),
+                (0.72, "#EE964B"),
+                (0.90, "#F95738"),
+                (1.00, "#2B061E")
+              ]
+            ),
+            
+            // ——— Scientific refined (smooth, perceptual) ———
+            PaletteItem(
+              name: "Viridis+ (Boosted)",
+              builtInIndex: nil,
+              stopsHex: [
+                (0.00, "#440154"),
+                (0.20, "#404387"),
+                (0.40, "#2A788E"),
+                (0.60, "#21A585"),
+                (0.80, "#7AD151"),
+                (1.00, "#FDE725")
+              ]
+            ),
+
+            PaletteItem(
+              name: "Magma+ (Warm)",
+              builtInIndex: nil,
+              stopsHex: [
+                (0.00, "#0B0724"),
+                (0.15, "#2B0B3F"),
+                (0.35, "#7B1E5A"),
+                (0.55, "#B63655"),
+                (0.75, "#F06B40"),
+                (1.00, "#FCFDBF")
+              ]
+            ),
+
+            PaletteItem(
+              name: "Inferno+ (Gold)",
+              builtInIndex: nil,
+              stopsHex: [
+                (0.00, "#0B0A0C"),
+                (0.18, "#320A5E"),
+                (0.36, "#871A3B"),
+                (0.58, "#D24F12"),
+                (0.78, "#F8B601"),
+                (1.00, "#FCFFA4")
+              ]
+            ),
+            
+            // ——— Metallic glossy ———
+            PaletteItem(
+              name: "Chrome",
+              builtInIndex: nil,
+              stopsHex: [
+                (0.00, "#0B0B0B"),
+                (0.08, "#1E1E1E"),
+                (0.18, "#A0A0A0"),
+                (0.28, "#EAEAEA"),
+                (0.40, "#6B6B6B"),
+                (0.55, "#FFFFFF"),
+                (0.72, "#8D8D8D"),
+                (0.86, "#D9D9D9"),
+                (1.00, "#0F0F0F")
+              ]
+            ),
+
+            PaletteItem(
+              name: "Polished Gold",
+              builtInIndex: nil,
+              stopsHex: [
+                (0.00, "#2B2100"),
+                (0.12, "#5A4300"),
+                (0.25, "#B38B00"),
+                (0.40, "#FFD34D"),
+                (0.55, "#FFF5C2"),
+                (0.70, "#E0BD48"),
+                (0.85, "#6A4E00"),
+                (1.00, "#2B2100")
+              ]
+            ),
+
+            PaletteItem(
+              name: "Copper Glow",
+              builtInIndex: nil,
+              stopsHex: [
+                (0.00, "#1C0C07"),
+                (0.15, "#3A160C"),
+                (0.30, "#7A2D15"),
+                (0.47, "#C3632F"),
+                (0.65, "#E79B66"),
+                (0.82, "#FFD6B8"),
+                (1.00, "#2B130B")
+              ]
+            ),
+
+            PaletteItem(
+              name: "Oil Slick",
+              builtInIndex: nil,
+              stopsHex: [
+                (0.00, "#0B0F14"),
+                (0.12, "#13233E"),
+                (0.25, "#163E7A"),
+                (0.38, "#215FA1"),
+                (0.52, "#35A08D"),
+                (0.66, "#7ED36A"),
+                (0.80, "#E8E86F"),
+                (0.92, "#F59AC5"),
+                (1.00, "#0B0F14")
+              ]
+            ),
+            
+            // ——— Soft pastel (for gentle textures) ———
+            PaletteItem(
+              name: "Pastel Breeze",
+              builtInIndex: nil,
+              stopsHex: [
+                (0.00, "#F7FBFF"),
+                (0.18, "#CCE5FF"),
+                (0.36, "#D6FFF6"),
+                (0.54, "#FFF7D6"),
+                (0.72, "#FFE0E9"),
+                (0.90, "#E7D6FF"),
+                (1.00, "#F7FBFF")
+              ]
+            ),
+            
+            // ——— Soft pastel (for gentle textures) ———
+            PaletteItem(
+              name: "Smooth Rainbow (Cyclic)",
+              builtInIndex: nil,
+              stopsHex: [
+                (0.00, "#FF0000"),
+                (0.17, "#FFFF00"),
+                (0.33, "#00FF00"),
+                (0.50, "#00FFFF"),
+                (0.67, "#0000FF"),
+                (0.83, "#FF00FF"),
+                (1.00, "#FF0000") // loop
+              ]
+            ),
         ]
 
         self.all = paletteData.map { item in

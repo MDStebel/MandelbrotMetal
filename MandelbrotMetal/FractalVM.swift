@@ -70,9 +70,11 @@ final class FractalVM: ObservableObject {
     private let kPerturb = "perturb"
     private let kDeep    = "deep"
     private let kPalette = "palette"
-
-    func saveState(perturb: Bool, deep: Bool, palette: Int) {
+    private let kContrast = "contrast"
+    
+    func saveState(perturb: Bool, deep: Bool, palette: Int, contrast: Double) {
         let d = UserDefaults.standard
+        d.set(contrast, forKey: kContrast)
         d.set(center.x, forKey: kCenterX)
         d.set(center.y, forKey: kCenterY)
         d.set(scalePixelsPerUnit, forKey: kScale)
@@ -82,7 +84,7 @@ final class FractalVM: ObservableObject {
         d.set(palette, forKey: kPalette)
     }
 
-    func loadState() -> (perturb: Bool, deep: Bool, palette: Int)? {
+    func loadState() -> (perturb: Bool, deep: Bool, palette: Int, contrast: Double)? {
         let d = UserDefaults.standard
         guard d.object(forKey: kCenterX) != nil else { return nil }
         let cx = d.double(forKey: kCenterX)
@@ -93,6 +95,7 @@ final class FractalVM: ObservableObject {
         let perturb = d.bool(forKey: kPerturb)
         let deep = d.bool(forKey: kDeep)
         let palette = d.integer(forKey: kPalette)
-        return (perturb, deep, palette)
+        let c = d.object(forKey: kContrast) != nil ? d.double(forKey: kContrast) : 1.0
+        return (perturb, deep, palette, c)
     }
 }

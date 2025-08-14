@@ -23,6 +23,8 @@ struct MandelbrotUniforms {
     int    deepMode;        // 0=float mapping, 1=double-single mapping
     int    _pad0;           // alignment padding
 
+    float  contrast;        // contrast shaping for normalized t (1.0 = neutral)
+
     // Double-single mapping splits
     float2 originHi;
     float2 originLo;
@@ -33,7 +35,7 @@ struct MandelbrotUniforms {
     int    perturbation;  // 0/1
     int    refCount;      // orbit length
     float2 c0;            // reference c
-    float2 _pad1;         // alignment padding
+    int2   _pad1;         // alignment padding
 };
 
 // =============================================================
@@ -261,6 +263,9 @@ kernel void mandelbrotKernel(
                     float mu = (float)it + 1.0f - clamp(nu, 0.0f, 1.0f);
                     float t = clamp(mu / (float)max(1, u.maxIt), 0.0f, 1.0f);
                     t = clamp((t - 0.015f) / 0.97f, 0.0f, 1.0f);
+                    // Contrast shaping (1.0 = neutral). Avoid divide-by-zero.
+                    float c = max(u.contrast, 0.01f);
+                    t = pow(t, 1.0f / c);
                     acc += pickColor(u.palette, t, paletteTex, samp);
                 }
             }
@@ -277,6 +282,9 @@ kernel void mandelbrotKernel(
                     float mu = (float)it + 1.0f - clamp(nu, 0.0f, 1.0f);
                     float t = clamp(mu / (float)max(1, u.maxIt), 0.0f, 1.0f);
                     t = clamp((t - 0.015f) / 0.97f, 0.0f, 1.0f);
+                    // Contrast shaping (1.0 = neutral). Avoid divide-by-zero.
+                    float c = max(u.contrast, 0.01f);
+                    t = pow(t, 1.0f / c);
                     acc += pickColor(u.palette, t, paletteTex, samp);
                 }
             }
