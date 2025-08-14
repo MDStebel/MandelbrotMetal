@@ -906,65 +906,87 @@ private func optionsSheet() -> some View {
             return
         }
         if isCapturing { print("[UI] capture already in progress — ignoring"); return }
-        
-        // Show HUD right away
+
         isCapturing = true
-        print("[UI] saveCurrentSnapshot() starting…")
-        
-        // Resolve target dimensions from picker
-        let dims: (Int, Int)
+        print("[UI] saveCurrentSnapshot() starting… (single‑pass canvas capture)")
+
+        // Desired export dimensions (used after capture for scaling only)
+        let exportDims: (Int, Int)
         switch snapRes {
         case .canvas:
-            dims = (Int(customW) ?? 3840, Int(customH) ?? 2160)
-        case .r4k:
-            dims = (3840, 2160)
-        case .r6k:
-            dims = (5760, 3240)
-        case .r8k:
-            dims = (7680, 4320)
-        case .custom:
-            dims = (Int(customW) ?? 3840, Int(customH) ?? 2160)
+            if let ds = vm.mtkView?.drawableSize { exportDims = (Int(ds.width), Int(ds.height)) } else { exportDims = (3840, 2160) }
+        case .r4k:    exportDims = (3840, 2160)
+        case .r6k:    exportDims = (5760, 3240)
+        case .r8k:    exportDims = (7680, 4320)
+        case .custom: exportDims = (Int(customW) ?? 3840, Int(customH) ?? 2160)
         }
-        let (w, h) = dims
-        
-        // 1) Commit any in-flight pan/zoom before saving (main thread)
+
+        // Commit any in‑flight pan/zoom so the snapshot matches what you see
         let commitSize = vm.mtkView?.bounds.size ?? UIScreen.main.bounds.size
         commitPendingInteractions(commitSize)
-        
-        // 2) Ensure palette & effective iterations match the view (main thread)
+
+        // Use current view settings
         renderer.setPalette(palette)
         let effectiveIters = autoIterations ? autoIterationsForScale(vm.scalePixelsPerUnit) : vm.maxIterations
-        let exportIters = min(2_500, max(100, effectiveIters)) // clamp to keep capture snappy
+        let exportIters = min(2_500, max(100, effectiveIters))
         vm.maxIterations = exportIters
         renderer.setMaxIterations(exportIters)
-        
-        // Immutable snapshot of state AFTER the commit
+
+        // Capture EXACT canvas resolution to avoid any framing/clipping from tiling
+        let canvasW = Int(vm.mtkView?.drawableSize.width  ?? UIScreen.main.bounds.size.width  * UIScreen.main.scale)
+        let canvasH = Int(vm.mtkView?.drawableSize.height ?? UIScreen.main.bounds.size.height * UIScreen.main.scale)
         let snapCenter = vm.center
         let snapScale  = vm.scalePixelsPerUnit
+
         let t0 = CACurrentMediaTime()
-        
-        // 3) Start async capture (tiles always; avoids big single allocations)
-        renderer.captureAsyncTiled(
-            width: w,
-            height: h,
-            tile: 256,
-            center: snapCenter,
-            scalePixelsPerUnit: snapScale,
-            iterations: exportIters,
-            progress: { _ in
-                // HUD already visible via isCapturing; nothing else needed
-            },
-            completion: { img in
-                let dt = CACurrentMediaTime() - t0
+        DispatchQueue.global(qos: .userInitiated).async {
+            let img = renderer.makeSnapshot(width: canvasW,
+                                            height: canvasH,
+                                            center: snapCenter,
+                                            scalePixelsPerUnit: snapScale,
+                                            iterations: exportIters)
+            DispatchQueue.main.async {
                 defer { self.isCapturing = false }
-                guard let img else {
-                    print("[UI] snapshot failed after \(String(format: "%.2f", dt))s")
-                    return
+                guard let baseImg = img else { print("[UI] snapshot failed"); return }
+
+                let (ew, eh) = exportDims
+                let finalImg: UIImage
+                if ew != canvasW || eh != canvasH {
+                    finalImg = self.scaleImagePreservingAspect(baseImg, to: CGSize(width: ew, height: eh))
+                } else {
+                    finalImg = baseImg
                 }
-                print("[UI] capture finished in \(String(format: "%.2f", dt))s")
-                self.handleSnapshotResult(img)
+                self.handleSnapshotResult(finalImg)
+                let dt = CACurrentMediaTime() - t0
+                print("[UI] capture finished in \(String(format: "%.2f", dt))s (canvas \(canvasW)x\(canvasH) → export \(ew)x\(eh))")
             }
-        )
+        }
+    }
+
+    private func scaleImagePreservingAspect(_ image: UIImage, to target: CGSize) -> UIImage {
+        let srcW = max(1, image.size.width)
+        let srcH = max(1, image.size.height)
+        let scaleX = target.width / srcW
+        let scaleY = target.height / srcH
+        let scale = min(scaleX, scaleY) // aspect‑fit (no cropping)
+        let outW = floor(srcW * scale)
+        let outH = floor(srcH * scale)
+        let dx = (target.width - outW) * 0.5
+        let dy = (target.height - outH) * 0.5
+
+        let fmt = UIGraphicsImageRendererFormat()
+        fmt.opaque = true
+        fmt.scale = 1
+        // Wide‑gamut hint for devices that support it. `UIGraphicsImageRendererFormat`
+        // doesn’t expose a color‑space selector on iOS; Photos will color‑manage on save.
+        fmt.preferredRange = useDisplayP3 ? .extended : .standard
+
+        let renderer = UIGraphicsImageRenderer(size: target, format: fmt)
+        return renderer.image { ctx in
+            UIColor.black.setFill()
+            ctx.fill(CGRect(origin: .zero, size: target))
+            image.draw(in: CGRect(x: dx, y: dy, width: outW, height: outH))
+        }
     }
     
     private func handleSnapshotResult(_ img: UIImage) {
