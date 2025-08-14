@@ -1071,34 +1071,3 @@ struct ShareSheet: UIViewControllerRepresentable {
     }
     func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
 }
-
-// MARK: - Photo Library Saving Helper
-enum PhotoSaveError: Error {
-    case notAuthorized
-    case writeFailed(Error?)
-}
-
-final class PhotoSaver {
-    static let shared = PhotoSaver()
-
-    /// Requests add-only permission if needed, then saves the image to Photos.
-    func saveToPhotos(_ image: UIImage, completion: @escaping (Result<Void, PhotoSaveError>) -> Void) {
-        PHPhotoLibrary.requestAuthorization(for: .addOnly) { status in
-            guard status == .authorized || status == .limited else {
-                DispatchQueue.main.async { completion(.failure(.notAuthorized)) }
-                return
-            }
-            PHPhotoLibrary.shared().performChanges({
-                PHAssetChangeRequest.creationRequestForAsset(from: image)
-            }, completionHandler: { ok, err in
-                DispatchQueue.main.async {
-                    ok ? completion(.success(())) : completion(.failure(.writeFailed(err)))
-                }
-            })
-        }
-    }
-}
-
-
-
-
