@@ -15,8 +15,8 @@ extension Notification.Name {
     static let SSAAStateChanged = Notification.Name("MandelbrotRenderer.SSAAStateChanged")
 }
 
-/// IMPORTANT: This struct must exactly match the struct in `mandelbrot.metal`.
-/// If you change the Metal struct, mirror the same field order, sizes and padding here.
+/// IMPORTANT: This struct must exactly match the struct in my file `mandelbrot.metal`.
+/// If I change the Metal struct, remember to mirror the same field order, sizes and padding here.
 struct MandelbrotUniforms {
     // Base float mapping
     var origin: SIMD2<Float>
@@ -24,21 +24,21 @@ struct MandelbrotUniforms {
     var maxIt:  Int32
     var size:   SIMD2<UInt32>
     var pixelStep: Int32
-
-    // Quality / color
+    
+    // Quality and color
     var subpixelSamples: Int32   // 1 or 4
     var palette: Int32           // 0=HSV, 1=Fire, 2=Ocean, 3=LUT
     var deepMode: Int32          // 0/1
     var _pad0: Int32             // keep 16B alignment
     
     var contrast: Float = 1.0    // contrast shaping for normalized t (1.0 = neutral)
-
+    
     // Double-single mapping splits
     var originHi: SIMD2<Float>
     var originLo: SIMD2<Float>
     var stepHi:   SIMD2<Float>
     var stepLo:   SIMD2<Float>
-
+    
     // Perturbation (optional)
     var perturbation: Int32      // 0/1
     var refCount: Int32          // entries in ref orbit buffer
@@ -47,35 +47,35 @@ struct MandelbrotUniforms {
 }
 
 final class MandelbrotRenderer: NSObject, MTKViewDelegate {
-
+    
     // MARK: - Metal objects
     private let device: MTLDevice
     private let queue: MTLCommandQueue
     private let pipeline: MTLComputePipelineState
     private let pipelinePerturb: MTLComputePipelineState?
-
-    // Offscreen render target (we blit to drawable)
+    
+    // Offscreen render target (blit to drawable)
     private var outTex: MTLTexture?
     private var paletteTexture: MTLTexture?
     private var dummyPaletteTex: MTLTexture?
-
+    
     // Optional perturbation reference orbit
     private var refOrbitBuffer: MTLBuffer?
     private var dummyOrbitBuffer: MTLBuffer?
-
+    
     private var refinePending = false
     private var highQualityIdle = true
-
+    
     private weak var mtkViewRef: MTKView?
-
+    
     /// Exposes whether sub‑pixel SSAA is active (4 samples)
     var isSSAAActive: Bool { uniforms.subpixelSamples >= 4 }
-
+    
     var needsRender = true
-
+    
     // Tunables
     private let deepZoomThreshold: Double = 1.0e4 // switch to DS mapping here
-
+    
     private var uniforms = MandelbrotUniforms(
         origin: .zero,
         step: .init(
@@ -99,7 +99,7 @@ final class MandelbrotRenderer: NSObject, MTKViewDelegate {
         c0: .zero,
         _pad1: .zero
     )
-
+    
     // MARK: - Lifecycle
     init?(mtkView: MTKView) {
         print("MandelbrotRenderer.init: starting…")
@@ -113,17 +113,17 @@ final class MandelbrotRenderer: NSObject, MTKViewDelegate {
         }
         self.device = device
         self.queue = queue
-
+        
         do {
             let lib = try device.makeDefaultLibrary(bundle: .main)
-
+            
             // Primary kernel
             guard let fnMain = lib.makeFunction(name: "mandelbrotKernel") else {
                 print("MandelbrotRenderer.init: **KERNEL NOT FOUND** (mandelbrotKernel) in default library")
                 return nil
             }
             self.pipeline = try device.makeComputePipelineState(function: fnMain)
-
+            
             // Optional perturbation kernel (same bindings)
             if let fnPerturb = lib.makeFunction(name: "mandelbrotKernelPerturb") {
                 self.pipelinePerturb = try? device.makeComputePipelineState(function: fnPerturb)
@@ -134,16 +134,16 @@ final class MandelbrotRenderer: NSObject, MTKViewDelegate {
                 self.pipelinePerturb = nil
                 print("MandelbrotRenderer.init: mandelbrotKernelPerturb not found; running without perturbation pipeline")
             }
-
+            
             print("MandelbrotRenderer.init: pipeline(s) created")
         } catch {
             print("MandelbrotRenderer.init: **FAILED** to build library/pipeline: \(error)")
             return nil
         }
-
+        
         super.init()
         mtkViewRef = mtkView
-
+        
         // MTKView config
         mtkView.device = device
         mtkView.colorPixelFormat = .bgra8Unorm
@@ -158,12 +158,12 @@ final class MandelbrotRenderer: NSObject, MTKViewDelegate {
             height: UIScreen.main.bounds.height * UIScreen.main.scale
         )
         mtkView.delegate = self
-        // Enable perturbation by default; the reference orbit will be built on the first setViewport()
+        // Disable perturbation by default; the reference orbit will be built on the first setViewport()
         // and subsequently rebuilt on viewport changes (see setViewport(_:)).
         uniforms.perturbation = 0  // default OFF; enable via UI with setPerturbation(true)
         print("MandelbrotRenderer.init: complete. framebufferOnly=\(mtkView.framebufferOnly)")
     }
-
+    
     // MARK: - Public knobs (called from UI)
     /// Toggle fast/idle quality (keeps full resolution; adjusts iteration count only).
     func setInteractive(_ on: Bool, baseIterations: Int) {
@@ -185,30 +185,30 @@ final class MandelbrotRenderer: NSObject, MTKViewDelegate {
         needsRender = true
         mtkViewRef?.setNeedsDisplay()
     }
-
+    
     func setPalette(_ mode: Int) {
         uniforms.palette = Int32(mode)
         needsRender = true
     }
-
+    
     func setMaxIterations(_ it: Int) {
         uniforms.maxIt = Int32(max(1, it))
         refinePending = highQualityIdle
         needsRender = true
     }
-
+    
     /// Deep Zoom is effectively always on now (DS mapping is enabled by threshold below).
     func setDeepZoom(_ on: Bool) {
         // Kept for API compatibility; behavior controlled by setViewport.
         needsRender = true
     }
-
+    
     func setHighQualityIdle(_ on: Bool) {
         highQualityIdle = on
         refinePending = on
         needsRender = true
     }
-
+    
     func setPerturbation(_ on: Bool) {
         uniforms.perturbation = on ? 1 : 0
         if on {
@@ -221,33 +221,33 @@ final class MandelbrotRenderer: NSObject, MTKViewDelegate {
         }
         needsRender = true
     }
-
+    
     func recenterReference(atComplex c: SIMD2<Double>, iterations: Int? = nil) {
         buildReferenceOrbit(c0: c, maxIt: max(1, iterations ?? Int(uniforms.maxIt)))
         needsRender = true
     }
-
+    
     // MARK: - Viewport
     func setViewport(center: SIMD2<Double>,
                      scalePixelsPerUnit: Double,
                      sizePts: CGSize,
                      screenScale: CGFloat,
                      maxIterations: Int) {
-
+        
         guard sizePts.width.isFinite, sizePts.height.isFinite, screenScale.isFinite else { return }
-
+        
         let pixelW = max(1, Int((sizePts.width * screenScale).rounded()))
         let pixelH = max(1, Int((sizePts.height * screenScale).rounded()))
         uniforms.size = SIMD2<UInt32>(UInt32(pixelW), UInt32(pixelH))
         uniforms.maxIt = Int32(max(1, maxIterations))
         uniforms.pixelStep = 1
         let prevSSAA = (uniforms.subpixelSamples >= 4)
-
+        
         let invScale = 1.0 / max(1e-12, scalePixelsPerUnit)
-
+        
         // Switch to DS mapping only when needed
         uniforms.deepMode = (scalePixelsPerUnit >= deepZoomThreshold) ? 1 : 0
-
+        
         // Enable 2×2 sub‑pixel SSAA for high zooms to reduce stair‑stepping
         uniforms.subpixelSamples = (scalePixelsPerUnit >= 1.0e5) ? 4 : 1
         let nowSSAA = (uniforms.subpixelSamples >= 4)
@@ -256,7 +256,7 @@ final class MandelbrotRenderer: NSObject, MTKViewDelegate {
                                             object: self,
                                             userInfo: ["active": nowSSAA])
         }
-
+        
         // Base mapping
         let halfW = 0.5 * Double(pixelW)
         let halfH = 0.5 * Double(pixelH)
@@ -264,7 +264,7 @@ final class MandelbrotRenderer: NSObject, MTKViewDelegate {
         let originY = center.y - halfH * invScale
         uniforms.origin = .init(Float(originX), Float(originY))
         uniforms.step   = .init(Float(invScale), Float(invScale))
-
+        
         @inline(__always)
         func split(_ d: Double) -> (Float, Float) {
             let hi = Float(d)
@@ -280,7 +280,7 @@ final class MandelbrotRenderer: NSObject, MTKViewDelegate {
         uniforms.originLo = .init(oLx, oLy)
         uniforms.stepHi   = .init(sHx, sHy)
         uniforms.stepLo   = .init(sLx, sLy)
-
+        
         // Rebuild perturbation orbit when enabled
         if uniforms.perturbation != 0 {
             let w = Int(uniforms.size.x), h = Int(uniforms.size.y)
@@ -290,12 +290,12 @@ final class MandelbrotRenderer: NSObject, MTKViewDelegate {
                 buildReferenceOrbit(c0: SIMD2<Double>(c0x, c0y), maxIt: Int(uniforms.maxIt))
             }
         }
-
+        
         allocateTextureIfNeeded(width: pixelW, height: pixelH)
         refinePending = highQualityIdle
         needsRender = true
     }
-
+    
     // MARK: - MTKViewDelegate
     func mtkView(_ view: MTKView, drawableSizeWillChange size: CGSize) {
         guard size.width.isFinite, size.height.isFinite else {
@@ -306,21 +306,21 @@ final class MandelbrotRenderer: NSObject, MTKViewDelegate {
                                 height: Int(size.height.rounded()))
         needsRender = true
     }
-
+    
     func draw(in view: MTKView) {
         guard let drawable = view.currentDrawable,
               let cmd = queue.makeCommandBuffer() else {
             print("MandelbrotRenderer.draw: missing drawable or cmd buffer")
             return
         }
-
+        
         let dw = drawable.texture.width
         let dh = drawable.texture.height
         guard dw > 0, dh > 0 else {
             cmd.commit()
             return
         }
-
+        
         if outTex == nil || outTex?.width != dw || outTex?.height != dh {
             allocateTextureIfNeeded(width: dw, height: dh)
         }
@@ -329,7 +329,7 @@ final class MandelbrotRenderer: NSObject, MTKViewDelegate {
             cmd.commit()
             return
         }
-
+        
         // Seed uniforms on first draw
         if uniforms.size.x == 0 || uniforms.size.y == 0 {
             uniforms.size = SIMD2<UInt32>(UInt32(dw), UInt32(dh))
@@ -341,16 +341,16 @@ final class MandelbrotRenderer: NSObject, MTKViewDelegate {
             uniforms.origin = SIMD2<Float>(Float(originX), Float(originY))
             uniforms.step   = SIMD2<Float>(Float(invScale), Float(invScale))
         }
-
+        
         validateBindingsAndFallback()
-
+        
         // Encode compute kernel
         if let enc = cmd.makeComputeCommandEncoder() {
             // Pick kernel: use perturb version only when enabled, orbit present, and pipeline available
             let usePerturb = (uniforms.perturbation != 0 && uniforms.refCount > 0 && pipelinePerturb != nil)
             let pipe = usePerturb ? pipelinePerturb! : pipeline
             enc.setComputePipelineState(pipe)
-
+            
             var u = uniforms
             // Bindings must match the kernel signature:
             // buffer(0): uniforms, buffer(1): refOrbit (optional), tex(0): outTex, tex(1): paletteTex
@@ -359,7 +359,7 @@ final class MandelbrotRenderer: NSObject, MTKViewDelegate {
             enc.setBuffer(orbitBuf, offset: 0, index: 1)
             enc.setTexture(outTex, index: 0)
             enc.setTexture(paletteTexture ?? ensureDummyPaletteTexture(), index: 1)
-
+            
             // Uniform threadgroup sizing (simulator-safe)
             let w = pipe.threadExecutionWidth
             let h = max(1, pipe.maxTotalThreadsPerThreadgroup / w)
@@ -371,7 +371,7 @@ final class MandelbrotRenderer: NSObject, MTKViewDelegate {
             enc.dispatchThreadgroups(groups, threadsPerThreadgroup: tg)
             enc.endEncoding()
         }
-
+        
         // Blit offscreen -> drawable
         if let blit = cmd.makeBlitCommandEncoder() {
             let size = MTLSize(width: outTex.width, height: outTex.height, depth: 1)
@@ -384,16 +384,16 @@ final class MandelbrotRenderer: NSObject, MTKViewDelegate {
                       destinationOrigin: MTLOrigin(x: 0, y: 0, z: 0))
             blit.endEncoding()
         }
-
+        
         drawable.present()
-
+        
         // Ensure HUD sees initial SSAA state after first size seed
         if uniforms.size.x != 0 && uniforms.size.y != 0 {
             NotificationCenter.default.post(name: .SSAAStateChanged,
                                             object: self,
                                             userInfo: ["active": (uniforms.subpixelSamples >= 4)])
         }
-
+        
         cmd.addCompletedHandler { [weak self] _ in
             guard let self else { return }
             if self.highQualityIdle && self.refinePending {
@@ -402,24 +402,24 @@ final class MandelbrotRenderer: NSObject, MTKViewDelegate {
                 DispatchQueue.main.async { self.mtkViewRef?.setNeedsDisplay() }
             }
         }
-
+        
         cmd.commit()
         needsRender = false
     }
-
+    
     // MARK: - Snapshot (single pass)
     func makeSnapshot(width: Int,
                       height: Int,
                       center: SIMD2<Double>,
                       scalePixelsPerUnit: Double,
                       iterations: Int) -> UIImage? {
-
+        
         guard width > 0, height > 0,
               let cmd = queue.makeCommandBuffer() else {
             print("[Snapshot] early exit: bad size or no command buffer")
             return nil
         }
-
+        
         let desc = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .bgra8Unorm,
                                                             width: width, height: height, mipmapped: false)
         desc.usage = [.shaderWrite, .shaderRead]
@@ -428,7 +428,7 @@ final class MandelbrotRenderer: NSObject, MTKViewDelegate {
             print("[Snapshot] failed to allocate snapTex")
             return nil
         }
-
+        
         var u = uniforms
         u.size = SIMD2<UInt32>(UInt32(width), UInt32(height))
         u.maxIt = Int32(max(1, max(iterations, Int(uniforms.maxIt))))
@@ -436,13 +436,13 @@ final class MandelbrotRenderer: NSObject, MTKViewDelegate {
         // Force high precision + SSAA for exports
         u.deepMode = 1
         u.subpixelSamples = 4
-
+        
         let invScale = 1.0 / max(1e-12, scalePixelsPerUnit)
         let originX = center.x - 0.5 * Double(width) * invScale
         let originY = center.y - 0.5 * Double(height) * invScale
         u.origin = SIMD2<Float>(Float(originX), Float(originY))
         u.step   = SIMD2<Float>(Float(invScale), Float(invScale))
-
+        
         @inline(__always)
         func split(_ d: Double) -> (Float, Float) {
             let hi = Float(d)
@@ -457,7 +457,7 @@ final class MandelbrotRenderer: NSObject, MTKViewDelegate {
         u.originLo = SIMD2<Float>(oRxLo, oRyLo)
         u.stepHi   = SIMD2<Float>(sX, sY)
         u.stepLo   = SIMD2<Float>(sXLo, sYLo)
-
+        
         if let enc = cmd.makeComputeCommandEncoder() {
             let usePerturb = (u.perturbation != 0 && u.refCount > 0 && pipelinePerturb != nil)
             let pipe = usePerturb ? pipelinePerturb! : pipeline
@@ -478,10 +478,10 @@ final class MandelbrotRenderer: NSObject, MTKViewDelegate {
             enc.dispatchThreadgroups(groups, threadsPerThreadgroup: tg)
             enc.endEncoding()
         }
-
+        
         cmd.commit()
         cmd.waitUntilCompleted()
-
+        
         // Readback
         let bytesPerRow = width * 4
         var data = Data(count: bytesPerRow * height)
@@ -492,7 +492,7 @@ final class MandelbrotRenderer: NSObject, MTKViewDelegate {
                                  mipmapLevel: 0)
             }
         }
-
+        
         let cs = CGColorSpaceCreateDeviceRGB()
         guard let provider = CGDataProvider(data: data as CFData) else { return nil }
         guard let cg = CGImage(
@@ -504,10 +504,10 @@ final class MandelbrotRenderer: NSObject, MTKViewDelegate {
             ),
             provider: provider, decode: nil, shouldInterpolate: false, intent: .defaultIntent
         ) else { return nil }
-
+        
         return UIImage(cgImage: cg)
     }
-
+    
     // MARK: - Async Tiled Capture
     func captureAsyncTiled(width: Int,
                            height: Int,
@@ -520,28 +520,28 @@ final class MandelbrotRenderer: NSObject, MTKViewDelegate {
         let W = max(1, width)
         let H = max(1, height)
         let tileSize = max(64, tile)
-
+        
         let bpp = 4
         let rowBytes = W * bpp
         var full = Data(count: rowBytes * H)
-
+        
         var u = self.uniforms
         u.maxIt = Int32(max(1, iterations))
         u.pixelStep = 1
         u.deepMode = 1
         u.subpixelSamples = 4
-
+        
         let invScale = 1.0 / max(1e-12, scalePixelsPerUnit)
         let originXFull = center.x - 0.5 * Double(W) * invScale
         let originYFull = center.y - 0.5 * Double(H) * invScale
-
+        
         @inline(__always)
         func split(_ d: Double) -> (Float, Float) {
             let hi = Float(d)
             let lo = Float(d - Double(hi))
             return (hi, lo)
         }
-
+        
         // Build list of tiles in center-out order
         var tiles: [(x: Int, y: Int, w: Int, h: Int)] = []
         let cols = (W + tileSize - 1) / tileSize
@@ -568,9 +568,9 @@ final class MandelbrotRenderer: NSObject, MTKViewDelegate {
             ring += 1
             if tiles.count > cols * rows { tiles.removeLast(tiles.count - cols * rows) }
         }
-
+        
         let renderQueue = DispatchQueue(label: "mandel.capture.queue", qos: .userInitiated)
-
+        
         func finishImage(_ data: Data) {
             let cs = CGColorSpaceCreateDeviceRGB()
             guard let provider = CGDataProvider(data: data as CFData) else {
@@ -579,13 +579,13 @@ final class MandelbrotRenderer: NSObject, MTKViewDelegate {
             guard let cg = CGImage(width: W, height: H, bitsPerComponent: 8, bitsPerPixel: 32,
                                    bytesPerRow: rowBytes, space: cs,
                                    bitmapInfo: CGBitmapInfo.byteOrder32Little.union(
-                                       CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedFirst.rawValue)
+                                    CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedFirst.rawValue)
                                    ),
                                    provider: provider, decode: nil, shouldInterpolate: false, intent: .defaultIntent)
             else { DispatchQueue.main.async { completion(nil) }; return }
             DispatchQueue.main.async { completion(UIImage(cgImage: cg)) }
         }
-
+        
         func renderTile(at index: Int) {
             if index >= tiles.count { finishImage(full); return }
             let t = tiles[index]
@@ -600,14 +600,14 @@ final class MandelbrotRenderer: NSObject, MTKViewDelegate {
                         DispatchQueue.main.async { completion(nil) }
                         return
                     }
-
+                    
                     // Tile mapping
                     let tOriginX = originXFull + Double(t.x) * invScale
                     let tOriginY = originYFull + Double(t.y) * invScale
                     u.origin = SIMD2<Float>(Float(tOriginX), Float(tOriginY))
                     u.step   = SIMD2<Float>(Float(invScale), Float(invScale))
                     u.size   = SIMD2<UInt32>(UInt32(t.w), UInt32(t.h))
-
+                    
                     let (oRx, oRxLo) = split(tOriginX)
                     let (oRy, oRyLo) = split(tOriginY)
                     let (sX,  sXLo)  = split(invScale)
@@ -616,23 +616,23 @@ final class MandelbrotRenderer: NSObject, MTKViewDelegate {
                     u.originLo = SIMD2<Float>(oRxLo, oRyLo)
                     u.stepHi   = SIMD2<Float>(sX, sY)
                     u.stepLo   = SIMD2<Float>(sXLo, sYLo)
-
+                    
                     if let enc = cmd.makeComputeCommandEncoder() {
                         var uLocal = u
                         if uLocal.palette == 3 && self.paletteTexture == nil { uLocal.palette = 0 }
-
+                        
                         let usePerturb = (uLocal.perturbation != 0 && uLocal.refCount > 0 && self.pipelinePerturb != nil)
                         let pipe = usePerturb ? self.pipelinePerturb! : self.pipeline
                         enc.setComputePipelineState(pipe)
-
+                        
                         enc.setBytes(&uLocal, length: MemoryLayout<MandelbrotUniforms>.stride, index: 0)
                         let orbitBuf = (uLocal.perturbation != 0 && uLocal.refCount > 0)
-                            ? (self.refOrbitBuffer ?? self.ensureDummyOrbitBuffer())
-                            : self.ensureDummyOrbitBuffer()
+                        ? (self.refOrbitBuffer ?? self.ensureDummyOrbitBuffer())
+                        : self.ensureDummyOrbitBuffer()
                         enc.setBuffer(orbitBuf, offset: 0, index: 1)
                         enc.setTexture(tex, index: 0)
                         enc.setTexture(self.paletteTexture ?? self.ensureDummyPaletteTexture(), index: 1)
-
+                        
                         let wth = pipe.threadExecutionWidth
                         let hth = max(1, pipe.maxTotalThreadsPerThreadgroup / wth)
                         let tg = MTLSize(width: wth, height: hth, depth: 1)
@@ -642,7 +642,7 @@ final class MandelbrotRenderer: NSObject, MTKViewDelegate {
                         enc.dispatchThreadgroups(groups, threadsPerThreadgroup: tg)
                         enc.endEncoding()
                     }
-
+                    
                     cmd.addCompletedHandler { _ in
                         full.withUnsafeMutableBytes { p in
                             guard let base = p.baseAddress else { return }
@@ -655,18 +655,18 @@ final class MandelbrotRenderer: NSObject, MTKViewDelegate {
                         DispatchQueue.main.async { progress(pct) }
                         renderTile(at: index + 1)
                     }
-
+                    
                     cmd.commit()
                 }
             }
         }
-
+        
         DispatchQueue.main.async { progress(0.0) }
         renderTile(at: 0)
     }
-
+    
     // MARK: - Helpers / fallback
-
+    
     private func validateBindingsAndFallback() {
         if uniforms.palette == 3 && paletteTexture == nil {
             let msg = "LUT unavailable: fell back to HSV"
@@ -681,7 +681,7 @@ final class MandelbrotRenderer: NSObject, MTKViewDelegate {
             NotificationCenter.default.post(name: .MandelbrotRendererFallback, object: self, userInfo: ["reason": msg])
         }
     }
-
+    
     private func ensureDummyOrbitBuffer() -> MTLBuffer? {
         if let b = dummyOrbitBuffer { return b }
         var zero = SIMD2<Float>(repeating: 0)
@@ -690,7 +690,7 @@ final class MandelbrotRenderer: NSObject, MTKViewDelegate {
                                              options: .storageModeShared)
         return dummyOrbitBuffer
     }
-
+    
     private func buildReferenceOrbit(c0: SIMD2<Double>, maxIt: Int) {
         var orbit = [SIMD2<Float>](repeating: .zero, count: maxIt)
         var zr = 0.0, zi = 0.0
@@ -706,7 +706,7 @@ final class MandelbrotRenderer: NSObject, MTKViewDelegate {
         refOrbitBuffer = device.makeBuffer(bytes: orbit, length: length, options: .storageModeShared)
         print("[Perturb] orbit len=\(maxIt) c0=\(c0)")
     }
-
+    
     private func ensureDummyPaletteTexture() -> MTLTexture? {
         if let t = dummyPaletteTex { return t }
         let desc = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .bgra8Unorm,
@@ -724,7 +724,7 @@ final class MandelbrotRenderer: NSObject, MTKViewDelegate {
         dummyPaletteTex = tex
         return tex
     }
-
+    
     private func allocateTextureIfNeeded(width: Int, height: Int) {
         guard width > 0, height > 0 else { return }
         if let t = outTex, t.width == width, t.height == height { return }
@@ -734,13 +734,13 @@ final class MandelbrotRenderer: NSObject, MTKViewDelegate {
         desc.storageMode = .private
         outTex = device.makeTexture(descriptor: desc)
     }
-
+    
     // Upload a custom LUT image (BGRA8)
     func setPaletteImage(_ image: UIImage) {
         guard let cg = image.cgImage else { return }
         let width = cg.width, height = cg.height
         guard width > 0, height > 0 else { return }
-
+        
         let bytesPerRow = width * 4
         var data = Data(count: bytesPerRow * height)
         data.withUnsafeMutableBytes { buf in
@@ -749,19 +749,19 @@ final class MandelbrotRenderer: NSObject, MTKViewDelegate {
             if let ctx = CGContext(data: base, width: width, height: height,
                                    bitsPerComponent: 8, bytesPerRow: bytesPerRow, space: cs,
                                    bitmapInfo: CGBitmapInfo.byteOrder32Little.union(
-                                       CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedFirst.rawValue)
+                                    CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedFirst.rawValue)
                                    ).rawValue) {
                 ctx.interpolationQuality = .high
                 ctx.draw(cg, in: CGRect(x: 0, y: 0, width: width, height: height))
             }
         }
-
+        
         let desc = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .bgra8Unorm,
                                                             width: width, height: height, mipmapped: false)
         desc.usage = [.shaderRead]
         desc.storageMode = .shared
         guard let tex = device.makeTexture(descriptor: desc) else { return }
-
+        
         data.withUnsafeBytes { buf in
             if let base = buf.baseAddress {
                 tex.replace(region: MTLRegionMake2D(0, 0, width, height),

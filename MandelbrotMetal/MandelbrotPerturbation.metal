@@ -4,7 +4,7 @@
 //
 //  Created by Michael Stebel on 8/13/25.
 //
-// Drop‑in guarded-perturbation kernel (A/B alongside my current kernel)
+//  Drop‑in guarded-perturbation kernel (A/B alongside my current kernel)
 
 #include <metal_stdlib>
 using namespace metal;

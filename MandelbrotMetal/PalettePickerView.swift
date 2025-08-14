@@ -15,6 +15,7 @@ import simd
 struct PalettePickerView: View {
     @Environment(\.horizontalSizeClass) private var hSize
     @State private var refreshID = UUID()
+    
     let selected: String
     let options: [PaletteOption]
     let onSelect: (PaletteOption) -> Void

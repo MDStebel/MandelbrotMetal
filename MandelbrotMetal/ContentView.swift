@@ -16,7 +16,9 @@ struct ContentView: View {
     @Environment(\.horizontalSizeClass) private var hSize
     @Environment(\.verticalSizeClass) private var vSize
     @Environment(\.scenePhase) private var scenePhase
+    
     @StateObject private var vm = FractalVM()
+    
     @State private var pendingCenter = SIMD2<Double>(0, 0)
     @State private var pendingScale  = 1.0
     @State private var palette = 0 // 0=HSV, 1=Fire, 2=Ocean
@@ -35,6 +37,7 @@ struct ContentView: View {
     @State private var showOptionsSheet = false
     @State private var showCaptureSheet = false
     @State private var isCapturing = false
+    
     struct Bookmark: Codable, Identifiable { var id = UUID(); var name: String; var center: SIMD2<Double>; var scale: Double; var palette: Int; var deep: Bool; var perturb: Bool }
     @State private var bookmarks: [Bookmark] = []
     @State private var showAddBookmark = false
@@ -56,11 +59,11 @@ struct ContentView: View {
     @State private var customW: String = "3840"
     @State private var customH: String = "2160"
     @State private var showCustomRes = false
-    private let kPaletteNameKey = "palette_name_v1"
     @State private var highQualityIdleRender: Bool = true
     @State private var isInteracting: Bool = false
-    private let kHQIdleKey = "hq_idle_render_v1"
     @State private var contrast: Double = 1.0  // neutral
+    private let kPaletteNameKey = "palette_name_v1"
+    private let kHQIdleKey = "hq_idle_render_v1"
     
     var body: some View {
         NavigationStack { GeometryReader { geo in
@@ -288,7 +291,7 @@ struct ContentView: View {
             .sheet(isPresented: $showOptionsSheet) {
                 optionsSheet()
             }
-            .navigationTitle("Mandelbrot")
+            .navigationTitle("Mandelbrot Metal")
             .navigationBarTitleDisplayMode(.inline)
         }
     }
@@ -673,7 +676,7 @@ private func optionsSheet() -> some View {
     private var hud: some View {
         let compact = (hSize == .compact)
         return VStack(alignment: .leading, spacing: compact ? 4 : 6) {
-            Text("Mandelbrot Metal")
+            Text("Mandelbrot Set")
                 .font(compact ? Font.subheadline : Font.headline)
                 .monospaced()
                 .legibleText()
@@ -885,6 +888,7 @@ private func optionsSheet() -> some View {
             }
         }
     }
+    
     private func saveBookmarks() {
         do {
             let data = try JSONEncoder().encode(bookmarks)
@@ -893,6 +897,7 @@ private func optionsSheet() -> some View {
             print("[BM] save failed: \(error)")
         }
     }
+    
     private func loadBookmarks() {
         guard let data = UserDefaults.standard.data(forKey: kBookmarks) else { return }
         do {
@@ -931,10 +936,10 @@ private func optionsSheet() -> some View {
             return
         }
         if isCapturing { print("[UI] capture already in progress — ignoring"); return }
-
+        
         isCapturing = true
         print("[UI] saveCurrentSnapshot() starting… (single‑pass canvas capture)")
-
+        
         // Desired export dimensions (used after capture for scaling only)
         let exportDims: (Int, Int)
         switch snapRes {
@@ -945,24 +950,24 @@ private func optionsSheet() -> some View {
         case .r8k:    exportDims = (7680, 4320)
         case .custom: exportDims = (Int(customW) ?? 3840, Int(customH) ?? 2160)
         }
-
+        
         // Commit any in‑flight pan/zoom so the snapshot matches what you see
         let commitSize = vm.mtkView?.bounds.size ?? UIScreen.main.bounds.size
         commitPendingInteractions(commitSize)
-
+        
         // Use current view settings
         renderer.setPalette(palette)
         let effectiveIters = autoIterations ? autoIterationsForScale(vm.scalePixelsPerUnit) : vm.maxIterations
         let exportIters = min(2_500, max(100, effectiveIters))
         vm.maxIterations = exportIters
         renderer.setMaxIterations(exportIters)
-
+        
         // Capture EXACT canvas resolution to avoid any framing/clipping from tiling
         let canvasW = Int(vm.mtkView?.drawableSize.width  ?? UIScreen.main.bounds.size.width  * UIScreen.main.scale)
         let canvasH = Int(vm.mtkView?.drawableSize.height ?? UIScreen.main.bounds.size.height * UIScreen.main.scale)
         let snapCenter = vm.center
         let snapScale  = vm.scalePixelsPerUnit
-
+        
         let t0 = CACurrentMediaTime()
         DispatchQueue.global(qos: .userInitiated).async {
             let img = renderer.makeSnapshot(width: canvasW,
@@ -973,7 +978,7 @@ private func optionsSheet() -> some View {
             DispatchQueue.main.async {
                 defer { self.isCapturing = false }
                 guard let baseImg = img else { print("[UI] snapshot failed"); return }
-
+                
                 let (ew, eh) = exportDims
                 let finalImg: UIImage
                 if ew != canvasW || eh != canvasH {
@@ -1050,7 +1055,6 @@ private func optionsSheet() -> some View {
         isInteracting = false
         showCaptureSheet = true
     }
-
 
     private func fmt(_ x: Double) -> String {
         let f = NumberFormatter()

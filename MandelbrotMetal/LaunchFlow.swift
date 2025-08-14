@@ -7,7 +7,7 @@
 
 import SwiftUI
 
-// MARK: - Launch Flow Container
+/// Launch Flow Container
 struct LaunchFlow<Main: View>: View {
     @Environment(\.colorScheme) private var scheme
     @Environment(\.horizontalSizeClass) private var hSize

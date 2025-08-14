@@ -39,130 +39,1088 @@ final class PaletteCatalog {
     private init() {
         let paletteData: [PaletteItem] = [
             // ——— Vivid / Artistic ———
-            .init(name: "Neon", builtInIndex: nil, stopsHex: [
-                (0.00, "#000000"), (0.08, "#00FFC0"), (0.20, "#00CCFF"), (0.35, "#6733FF"), (0.55, "#FF19E6"), (0.75, "#FFD133"), (1.00, "#FFFFFF")
-            ]),
-            .init(name: "Vibrant", builtInIndex: nil, stopsHex: [
-                (0.00, "#0D0526"), (0.15, "#3300B3"), (0.35, "#00A8FF"), (0.55, "#00E665"), (0.75, "#FFD000"), (1.00, "#FF271A")
-            ]),
-            .init(name: "Sunset Glow", builtInIndex: nil, stopsHex: [
-                (0.00, "#140026"), (0.18, "#660066"), (0.38, "#D93666"), (0.60, "#FF8A1A"), (0.82, "#FFE066"), (1.00, "#FFF7D9")
-            ]),
-            .init(name: "Candy", builtInIndex: nil, stopsHex: [
-                (0.00, "#1A0033"), (0.20, "#E636BF"), (0.40, "#FF6680"), (0.60, "#FFB84D"), (0.80, "#E6F26A"), (1.00, "#CCFFF2")
-            ]),
-            .init(name: "Aurora Borealis", builtInIndex: nil, stopsHex: [
-                (0.00, "#000613"), (0.18, "#00665A"), (0.36, "#00CBB0"), (0.58, "#59F2E6"), (0.78, "#99D6FF"), (1.00, "#EBF7FF")
-            ]),
-            .init(name: "Cyberpunk", builtInIndex: nil, stopsHex: [
-                (0.00, "#0A0015"), (0.20, "#1F008C"), (0.40, "#8C00D9"), (0.60, "#00E5EB"), (0.80, "#FF3399"), (1.00, "#FFF2E6")
-            ]),
-            .init(name: "Lava", builtInIndex: nil, stopsHex: [
-                (0.00, "#000000"), (0.18, "#400000"), (0.38, "#A50000"), (0.58, "#FF4D00"), (0.78, "#FFB800"), (1.00, "#FFFFFF")
-            ]),
-            .init(name: "Peacock", builtInIndex: nil, stopsHex: [
-                (0.00, "#061018"), (0.18, "#004D40"), (0.38, "#009688"), (0.58, "#26C6DA"), (0.78, "#7E57C2"), (1.00, "#EDE7F6")
-            ]),
-            .init(name: "Twilight", builtInIndex: nil, stopsHex: [
-                (0.00, "#00020A"), (0.25, "#061A40"), (0.50, "#0B4F6C"), (0.75, "#145C9E"), (1.00, "#E0F2FF")
-            ]),
-            .init(name: "Cosmic Fire", builtInIndex: nil, stopsHex: [
-                (0.00, "#060000"), (0.22, "#3D0711"), (0.44, "#920E1B"), (0.66, "#FF6A00"), (0.88, "#FFD166"), (1.00, "#FFF4D6")
-            ]),
-            .init(name: "Electric Blue", builtInIndex: nil, stopsHex: [
-                (0.00, "#00030A"), (0.20, "#001B44"), (0.45, "#0066FF"), (0.75, "#33B3FF"), (1.00, "#E6F3FF")
-            ]),
-
+            .init(
+                name: "Neon",
+                builtInIndex: nil,
+                stopsHex: [
+                    (
+                        0.00,
+                        "#000000"
+                    ),
+                    (
+                        0.08,
+                        "#00FFC0"
+                    ),
+                    (
+                        0.20,
+                        "#00CCFF"
+                    ),
+                    (
+                        0.35,
+                        "#6733FF"
+                    ),
+                    (
+                        0.55,
+                        "#FF19E6"
+                    ),
+                    (
+                        0.75,
+                        "#FFD133"
+                    ),
+                    (
+                        1.00,
+                        "#FFFFFF"
+                    )
+                ]
+            ),
+            .init(
+                name: "Vibrant",
+                builtInIndex: nil,
+                stopsHex: [
+                    (
+                        0.00,
+                        "#0D0526"
+                    ),
+                    (
+                        0.15,
+                        "#3300B3"
+                    ),
+                    (
+                        0.35,
+                        "#00A8FF"
+                    ),
+                    (
+                        0.55,
+                        "#00E665"
+                    ),
+                    (
+                        0.75,
+                        "#FFD000"
+                    ),
+                    (
+                        1.00,
+                        "#FF271A"
+                    )
+                ]
+            ),
+            .init(
+                name: "Sunset Glow",
+                builtInIndex: nil,
+                stopsHex: [
+                    (
+                        0.00,
+                        "#140026"
+                    ),
+                    (
+                        0.18,
+                        "#660066"
+                    ),
+                    (
+                        0.38,
+                        "#D93666"
+                    ),
+                    (
+                        0.60,
+                        "#FF8A1A"
+                    ),
+                    (
+                        0.82,
+                        "#FFE066"
+                    ),
+                    (
+                        1.00,
+                        "#FFF7D9"
+                    )
+                ]
+            ),
+            .init(
+                name: "Candy",
+                builtInIndex: nil,
+                stopsHex: [
+                    (
+                        0.00,
+                        "#1A0033"
+                    ),
+                    (
+                        0.20,
+                        "#E636BF"
+                    ),
+                    (
+                        0.40,
+                        "#FF6680"
+                    ),
+                    (
+                        0.60,
+                        "#FFB84D"
+                    ),
+                    (
+                        0.80,
+                        "#E6F26A"
+                    ),
+                    (
+                        1.00,
+                        "#CCFFF2"
+                    )
+                ]
+            ),
+            .init(
+                name: "Aurora Borealis",
+                builtInIndex: nil,
+                stopsHex: [
+                    (
+                        0.00,
+                        "#000613"
+                    ),
+                    (
+                        0.18,
+                        "#00665A"
+                    ),
+                    (
+                        0.36,
+                        "#00CBB0"
+                    ),
+                    (
+                        0.58,
+                        "#59F2E6"
+                    ),
+                    (
+                        0.78,
+                        "#99D6FF"
+                    ),
+                    (
+                        1.00,
+                        "#EBF7FF"
+                    )
+                ]
+            ),
+            .init(
+                name: "Cyberpunk",
+                builtInIndex: nil,
+                stopsHex: [
+                    (
+                        0.00,
+                        "#0A0015"
+                    ),
+                    (
+                        0.20,
+                        "#1F008C"
+                    ),
+                    (
+                        0.40,
+                        "#8C00D9"
+                    ),
+                    (
+                        0.60,
+                        "#00E5EB"
+                    ),
+                    (
+                        0.80,
+                        "#FF3399"
+                    ),
+                    (
+                        1.00,
+                        "#FFF2E6"
+                    )
+                ]
+            ),
+            .init(
+                name: "Lava",
+                builtInIndex: nil,
+                stopsHex: [
+                    (
+                        0.00,
+                        "#000000"
+                    ),
+                    (
+                        0.18,
+                        "#400000"
+                    ),
+                    (
+                        0.38,
+                        "#A50000"
+                    ),
+                    (
+                        0.58,
+                        "#FF4D00"
+                    ),
+                    (
+                        0.78,
+                        "#FFB800"
+                    ),
+                    (
+                        1.00,
+                        "#FFFFFF"
+                    )
+                ]
+            ),
+            .init(
+                name: "Peacock",
+                builtInIndex: nil,
+                stopsHex: [
+                    (
+                        0.00,
+                        "#061018"
+                    ),
+                    (
+                        0.18,
+                        "#004D40"
+                    ),
+                    (
+                        0.38,
+                        "#009688"
+                    ),
+                    (
+                        0.58,
+                        "#26C6DA"
+                    ),
+                    (
+                        0.78,
+                        "#7E57C2"
+                    ),
+                    (
+                        1.00,
+                        "#EDE7F6"
+                    )
+                ]
+            ),
+            .init(
+                name: "Twilight",
+                builtInIndex: nil,
+                stopsHex: [
+                    (
+                        0.00,
+                        "#00020A"
+                    ),
+                    (
+                        0.25,
+                        "#061A40"
+                    ),
+                    (
+                        0.50,
+                        "#0B4F6C"
+                    ),
+                    (
+                        0.75,
+                        "#145C9E"
+                    ),
+                    (
+                        1.00,
+                        "#E0F2FF"
+                    )
+                ]
+            ),
+            .init(
+                name: "Cosmic Fire",
+                builtInIndex: nil,
+                stopsHex: [
+                    (
+                        0.00,
+                        "#060000"
+                    ),
+                    (
+                        0.22,
+                        "#3D0711"
+                    ),
+                    (
+                        0.44,
+                        "#920E1B"
+                    ),
+                    (
+                        0.66,
+                        "#FF6A00"
+                    ),
+                    (
+                        0.88,
+                        "#FFD166"
+                    ),
+                    (
+                        1.00,
+                        "#FFF4D6"
+                    )
+                ]
+            ),
+            .init(
+                name: "Electric Blue",
+                builtInIndex: nil,
+                stopsHex: [
+                    (
+                        0.00,
+                        "#00030A"
+                    ),
+                    (
+                        0.20,
+                        "#001B44"
+                    ),
+                    (
+                        0.45,
+                        "#0066FF"
+                    ),
+                    (
+                        0.75,
+                        "#33B3FF"
+                    ),
+                    (
+                        1.00,
+                        "#E6F3FF"
+                    )
+                ]
+            ),
+            
             // ——— Metallic / Shiny ———
-            .init(name: "Metallic Silver", builtInIndex: nil, stopsHex: [
-                (0.00, "#0D0D0D"), (0.10, "#4D4D4D"), (0.22, "#D9D9D9"), (0.35, "#595959"), (0.50, "#EBEBEB"), (0.65, "#666666"), (0.78, "#E0E0E0"), (1.00, "#262626")
-            ]),
-            .init(name: "Chrome", builtInIndex: nil, stopsHex: [
-                (0.00, "#050505"), (0.08, "#404040"), (0.16, "#F2F2F2"), (0.24, "#333333"), (0.32, "#FAFAFA"), (0.46, "#2E2E2E"), (0.64, "#F0F0F0"), (1.00, "#1A1A1A")
-            ]),
-            .init(name: "Gold", builtInIndex: nil, stopsHex: [
-                (0.00, "#1A1100"), (0.15, "#8C5F00"), (0.35, "#F2C200"), (0.55, "#FFE44D"), (0.75, "#CC990D"), (1.00, "#332200")
-            ]),
-            .init(name: "Copper", builtInIndex: nil, stopsHex: [
-                (0.00, "#120400"), (0.20, "#8C330D"), (0.45, "#E67326"), (0.65, "#B3471A"), (0.85, "#FFC299"), (1.00, "#331400")
-            ]),
-            .init(name: "Iridescent", builtInIndex: nil, stopsHex: [
-                (0.00, "#190033"), (0.15, "#00A5CC"), (0.30, "#9933FF"), (0.50, "#FF66E6"), (0.70, "#19E6A8"), (1.00, "#F2F2F2")
-            ]),
-
+            .init(
+                name: "Metallic Silver",
+                builtInIndex: nil,
+                stopsHex: [
+                    (
+                        0.00,
+                        "#0D0D0D"
+                    ),
+                    (
+                        0.10,
+                        "#4D4D4D"
+                    ),
+                    (
+                        0.22,
+                        "#D9D9D9"
+                    ),
+                    (
+                        0.35,
+                        "#595959"
+                    ),
+                    (
+                        0.50,
+                        "#EBEBEB"
+                    ),
+                    (
+                        0.65,
+                        "#666666"
+                    ),
+                    (
+                        0.78,
+                        "#E0E0E0"
+                    ),
+                    (
+                        1.00,
+                        "#262626"
+                    )
+                ]
+            ),
+            .init(
+                name: "Chrome",
+                builtInIndex: nil,
+                stopsHex: [
+                    (
+                        0.00,
+                        "#050505"
+                    ),
+                    (
+                        0.08,
+                        "#404040"
+                    ),
+                    (
+                        0.16,
+                        "#F2F2F2"
+                    ),
+                    (
+                        0.24,
+                        "#333333"
+                    ),
+                    (
+                        0.32,
+                        "#FAFAFA"
+                    ),
+                    (
+                        0.46,
+                        "#2E2E2E"
+                    ),
+                    (
+                        0.64,
+                        "#F0F0F0"
+                    ),
+                    (
+                        1.00,
+                        "#1A1A1A"
+                    )
+                ]
+            ),
+            .init(
+                name: "Gold",
+                builtInIndex: nil,
+                stopsHex: [
+                    (
+                        0.00,
+                        "#1A1100"
+                    ),
+                    (
+                        0.15,
+                        "#8C5F00"
+                    ),
+                    (
+                        0.35,
+                        "#F2C200"
+                    ),
+                    (
+                        0.55,
+                        "#FFE44D"
+                    ),
+                    (
+                        0.75,
+                        "#CC990D"
+                    ),
+                    (
+                        1.00,
+                        "#332200"
+                    )
+                ]
+            ),
+            .init(
+                name: "Copper",
+                builtInIndex: nil,
+                stopsHex: [
+                    (
+                        0.00,
+                        "#120400"
+                    ),
+                    (
+                        0.20,
+                        "#8C330D"
+                    ),
+                    (
+                        0.45,
+                        "#E67326"
+                    ),
+                    (
+                        0.65,
+                        "#B3471A"
+                    ),
+                    (
+                        0.85,
+                        "#FFC299"
+                    ),
+                    (
+                        1.00,
+                        "#331400"
+                    )
+                ]
+            ),
+            .init(
+                name: "Iridescent",
+                builtInIndex: nil,
+                stopsHex: [
+                    (
+                        0.00,
+                        "#190033"
+                    ),
+                    (
+                        0.15,
+                        "#00A5CC"
+                    ),
+                    (
+                        0.30,
+                        "#9933FF"
+                    ),
+                    (
+                        0.50,
+                        "#FF66E6"
+                    ),
+                    (
+                        0.70,
+                        "#19E6A8"
+                    ),
+                    (
+                        1.00,
+                        "#F2F2F2"
+                    )
+                ]
+            ),
+            
             // ——— Scientific / Utility ———
-            .init(name: "Magma", builtInIndex: nil, stopsHex: [
-                (0.00, "#010004"), (0.25, "#17063C"), (0.50, "#5A1C50"), (0.75, "#B93C32"), (1.00, "#FCEFAF")
-            ]),
-            .init(name: "Inferno", builtInIndex: nil, stopsHex: [
-                (0.00, "#010003"), (0.25, "#1A0533"), (0.50, "#971F35"), (0.75, "#F28721"), (1.00, "#FCFFA5")
-            ]),
-            .init(name: "Plasma", builtInIndex: nil, stopsHex: [
-                (0.00, "#0D0887"), (0.25, "#7E03A8"), (0.50, "#CC4778"), (0.75, "#F89540"), (1.00, "#F0F921")
-            ]),
-            .init(name: "Viridis", builtInIndex: nil, stopsHex: [
-                (0.00, "#440154"), (0.25, "#414487"), (0.50, "#2A788E"), (0.75, "#22A884"), (1.00, "#FDE725")
-            ]),
-            .init(name: "Turbo", builtInIndex: nil, stopsHex: [
-                (0.00, "#23171B"), (0.25, "#37A2FF"), (0.50, "#7FE029"), (0.75, "#F3C200"), (1.00, "#7F0E00")
-            ]),
-            .init(name: "Grayscale", builtInIndex: nil, stopsHex: [
-                (0.00, "#000000"), (1.00, "#FFFFFF")
-            ]),
-
+            .init(
+                name: "Magma",
+                builtInIndex: nil,
+                stopsHex: [
+                    (
+                        0.00,
+                        "#010004"
+                    ),
+                    (
+                        0.25,
+                        "#17063C"
+                    ),
+                    (
+                        0.50,
+                        "#5A1C50"
+                    ),
+                    (
+                        0.75,
+                        "#B93C32"
+                    ),
+                    (
+                        1.00,
+                        "#FCEFAF"
+                    )
+                ]
+            ),
+            .init(
+                name: "Inferno",
+                builtInIndex: nil,
+                stopsHex: [
+                    (
+                        0.00,
+                        "#010003"
+                    ),
+                    (
+                        0.25,
+                        "#1A0533"
+                    ),
+                    (
+                        0.50,
+                        "#971F35"
+                    ),
+                    (
+                        0.75,
+                        "#F28721"
+                    ),
+                    (
+                        1.00,
+                        "#FCFFA5"
+                    )
+                ]
+            ),
+            .init(
+                name: "Plasma",
+                builtInIndex: nil,
+                stopsHex: [
+                    (
+                        0.00,
+                        "#0D0887"
+                    ),
+                    (
+                        0.25,
+                        "#7E03A8"
+                    ),
+                    (
+                        0.50,
+                        "#CC4778"
+                    ),
+                    (
+                        0.75,
+                        "#F89540"
+                    ),
+                    (
+                        1.00,
+                        "#F0F921"
+                    )
+                ]
+            ),
+            .init(
+                name: "Viridis",
+                builtInIndex: nil,
+                stopsHex: [
+                    (
+                        0.00,
+                        "#440154"
+                    ),
+                    (
+                        0.25,
+                        "#414487"
+                    ),
+                    (
+                        0.50,
+                        "#2A788E"
+                    ),
+                    (
+                        0.75,
+                        "#22A884"
+                    ),
+                    (
+                        1.00,
+                        "#FDE725"
+                    )
+                ]
+            ),
+            .init(
+                name: "Turbo",
+                builtInIndex: nil,
+                stopsHex: [
+                    (
+                        0.00,
+                        "#23171B"
+                    ),
+                    (
+                        0.25,
+                        "#37A2FF"
+                    ),
+                    (
+                        0.50,
+                        "#7FE029"
+                    ),
+                    (
+                        0.75,
+                        "#F3C200"
+                    ),
+                    (
+                        1.00,
+                        "#7F0E00"
+                    )
+                ]
+            ),
+            .init(
+                name: "Grayscale",
+                builtInIndex: nil,
+                stopsHex: [
+                    (
+                        0.00,
+                        "#000000"
+                    ),
+                    (
+                        1.00,
+                        "#FFFFFF"
+                    )
+                ]
+            ),
+            
             // ——— Natural / Classic ———
-            .init(name: "Sunset", builtInIndex: nil, stopsHex: [
-                (0.00, "#241A05"), (0.20, "#5A0835"), (0.40, "#B31A4D"), (0.65, "#FA6633"), (0.85, "#FFD280"), (1.00, "#FFF2B3")
-            ]),
-            .init(name: "Aurora", builtInIndex: nil, stopsHex: [
-                (0.00, "#05081A"), (0.25, "#00664D"), (0.50, "#19BF8C"), (0.75, "#66D9F2"), (1.00, "#DAF5FF")
-            ]),
-            .init(name: "Rainbow Smooth", builtInIndex: nil, stopsHex: [
-                (0.00, "#FF0000"), (0.17, "#FF7F00"), (0.33, "#FFFF00"), (0.50, "#00FF00"), (0.67, "#0000FF"), (0.83, "#7F00FF"), (1.00, "#FF0000")
-            ]),
-
+            .init(
+                name: "Sunset",
+                builtInIndex: nil,
+                stopsHex: [
+                    (
+                        0.00,
+                        "#241A05"
+                    ),
+                    (
+                        0.20,
+                        "#5A0835"
+                    ),
+                    (
+                        0.40,
+                        "#B31A4D"
+                    ),
+                    (
+                        0.65,
+                        "#FA6633"
+                    ),
+                    (
+                        0.85,
+                        "#FFD280"
+                    ),
+                    (
+                        1.00,
+                        "#FFF2B3"
+                    )
+                ]
+            ),
+            .init(
+                name: "Aurora",
+                builtInIndex: nil,
+                stopsHex: [
+                    (
+                        0.00,
+                        "#05081A"
+                    ),
+                    (
+                        0.25,
+                        "#00664D"
+                    ),
+                    (
+                        0.50,
+                        "#19BF8C"
+                    ),
+                    (
+                        0.75,
+                        "#66D9F2"
+                    ),
+                    (
+                        1.00,
+                        "#DAF5FF"
+                    )
+                ]
+            ),
+            .init(
+                name: "Rainbow Smooth",
+                builtInIndex: nil,
+                stopsHex: [
+                    (
+                        0.00,
+                        "#FF0000"
+                    ),
+                    (
+                        0.17,
+                        "#FF7F00"
+                    ),
+                    (
+                        0.33,
+                        "#FFFF00"
+                    ),
+                    (
+                        0.50,
+                        "#00FF00"
+                    ),
+                    (
+                        0.67,
+                        "#0000FF"
+                    ),
+                    (
+                        0.83,
+                        "#7F00FF"
+                    ),
+                    (
+                        1.00,
+                        "#FF0000"
+                    )
+                ]
+            ),
+            
             // ——— Gem / Extra Vivid ———
-            .init(name: "Sapphire", builtInIndex: nil, stopsHex: [
-                (0.00, "#00061A"), (0.20, "#003399"), (0.45, "#1A73FF"), (0.75, "#99C2FF"), (1.00, "#FFFFFF")
-            ]),
-            .init(name: "Emerald", builtInIndex: nil, stopsHex: [
-                (0.00, "#00140A"), (0.20, "#005C30"), (0.45, "#00BF66"), (0.75, "#80FFBF"), (1.00, "#FFFFFF")
-            ]),
-            .init(name: "Ruby", builtInIndex: nil, stopsHex: [
-                (0.00, "#140003"), (0.22, "#800033"), (0.46, "#E60040"), (0.72, "#FF8099"), (1.00, "#FFFFFF")
-            ]),
-            .init(name: "Amethyst", builtInIndex: nil, stopsHex: [
-                (0.00, "#0B0015"), (0.25, "#4D0099"), (0.50, "#B366FF"), (0.80, "#E6CCFF"), (1.00, "#FFFFFF")
-            ]),
-            .init(name: "Citrine", builtInIndex: nil, stopsHex: [
-                (0.00, "#1A1000"), (0.22, "#B37300"), (0.46, "#FFD11A"), (0.72, "#FFF099"), (1.00, "#FFFFFF")
-            ]),
-            .init(name: "Jade", builtInIndex: nil, stopsHex: [
-                (0.00, "#00130F"), (0.26, "#00594D"), (0.52, "#00D4A6"), (0.78, "#80FFE6"), (1.00, "#FFFFFF")
-            ]),
-            .init(name: "Coral", builtInIndex: nil, stopsHex: [
-                (0.00, "#1A0505"), (0.20, "#D94D40"), (0.45, "#FF8C73"), (0.75, "#FFE0B3"), (1.00, "#FFFFFF")
-            ]),
-            .init(name: "Midnight", builtInIndex: nil, stopsHex: [
-                (0.00, "#000005"), (0.25, "#000826"), (0.50, "#003373"), (0.75, "#3373D9"), (1.00, "#FFFFFF")
-            ]),
-            .init(name: "Solar Flare", builtInIndex: nil, stopsHex: [
-                (0.00, "#0D0500"), (0.22, "#BF4D00"), (0.44, "#FFB300"), (0.70, "#FFE680"), (1.00, "#FFFFFF")
-            ]),
-            .init(name: "Glacier", builtInIndex: nil, stopsHex: [
-                (0.00, "#00050D"), (0.20, "#004D99"), (0.45, "#73CCFF"), (0.75, "#D9F2FF"), (1.00, "#FFFFFF")
-            ]),
-
+            .init(
+                name: "Sapphire",
+                builtInIndex: nil,
+                stopsHex: [
+                    (
+                        0.00,
+                        "#00061A"
+                    ),
+                    (
+                        0.20,
+                        "#003399"
+                    ),
+                    (
+                        0.45,
+                        "#1A73FF"
+                    ),
+                    (
+                        0.75,
+                        "#99C2FF"
+                    ),
+                    (
+                        1.00,
+                        "#FFFFFF"
+                    )
+                ]
+            ),
+            .init(
+                name: "Emerald",
+                builtInIndex: nil,
+                stopsHex: [
+                    (
+                        0.00,
+                        "#00140A"
+                    ),
+                    (
+                        0.20,
+                        "#005C30"
+                    ),
+                    (
+                        0.45,
+                        "#00BF66"
+                    ),
+                    (
+                        0.75,
+                        "#80FFBF"
+                    ),
+                    (
+                        1.00,
+                        "#FFFFFF"
+                    )
+                ]
+            ),
+            .init(
+                name: "Ruby",
+                builtInIndex: nil,
+                stopsHex: [
+                    (
+                        0.00,
+                        "#140003"
+                    ),
+                    (
+                        0.22,
+                        "#800033"
+                    ),
+                    (
+                        0.46,
+                        "#E60040"
+                    ),
+                    (
+                        0.72,
+                        "#FF8099"
+                    ),
+                    (
+                        1.00,
+                        "#FFFFFF"
+                    )
+                ]
+            ),
+            .init(
+                name: "Amethyst",
+                builtInIndex: nil,
+                stopsHex: [
+                    (
+                        0.00,
+                        "#0B0015"
+                    ),
+                    (
+                        0.25,
+                        "#4D0099"
+                    ),
+                    (
+                        0.50,
+                        "#B366FF"
+                    ),
+                    (
+                        0.80,
+                        "#E6CCFF"
+                    ),
+                    (
+                        1.00,
+                        "#FFFFFF"
+                    )
+                ]
+            ),
+            .init(
+                name: "Citrine",
+                builtInIndex: nil,
+                stopsHex: [
+                    (
+                        0.00,
+                        "#1A1000"
+                    ),
+                    (
+                        0.22,
+                        "#B37300"
+                    ),
+                    (
+                        0.46,
+                        "#FFD11A"
+                    ),
+                    (
+                        0.72,
+                        "#FFF099"
+                    ),
+                    (
+                        1.00,
+                        "#FFFFFF"
+                    )
+                ]
+            ),
+            .init(
+                name: "Jade",
+                builtInIndex: nil,
+                stopsHex: [
+                    (
+                        0.00,
+                        "#00130F"
+                    ),
+                    (
+                        0.26,
+                        "#00594D"
+                    ),
+                    (
+                        0.52,
+                        "#00D4A6"
+                    ),
+                    (
+                        0.78,
+                        "#80FFE6"
+                    ),
+                    (
+                        1.00,
+                        "#FFFFFF"
+                    )
+                ]
+            ),
+            .init(
+                name: "Coral",
+                builtInIndex: nil,
+                stopsHex: [
+                    (
+                        0.00,
+                        "#1A0505"
+                    ),
+                    (
+                        0.20,
+                        "#D94D40"
+                    ),
+                    (
+                        0.45,
+                        "#FF8C73"
+                    ),
+                    (
+                        0.75,
+                        "#FFE0B3"
+                    ),
+                    (
+                        1.00,
+                        "#FFFFFF"
+                    )
+                ]
+            ),
+            .init(
+                name: "Midnight",
+                builtInIndex: nil,
+                stopsHex: [
+                    (
+                        0.00,
+                        "#000005"
+                    ),
+                    (
+                        0.25,
+                        "#000826"
+                    ),
+                    (
+                        0.50,
+                        "#003373"
+                    ),
+                    (
+                        0.75,
+                        "#3373D9"
+                    ),
+                    (
+                        1.00,
+                        "#FFFFFF"
+                    )
+                ]
+            ),
+            .init(
+                name: "Solar Flare",
+                builtInIndex: nil,
+                stopsHex: [
+                    (
+                        0.00,
+                        "#0D0500"
+                    ),
+                    (
+                        0.22,
+                        "#BF4D00"
+                    ),
+                    (
+                        0.44,
+                        "#FFB300"
+                    ),
+                    (
+                        0.70,
+                        "#FFE680"
+                    ),
+                    (
+                        1.00,
+                        "#FFFFFF"
+                    )
+                ]
+            ),
+            .init(
+                name: "Glacier",
+                builtInIndex: nil,
+                stopsHex: [
+                    (
+                        0.00,
+                        "#00050D"
+                    ),
+                    (
+                        0.20,
+                        "#004D99"
+                    ),
+                    (
+                        0.45,
+                        "#73CCFF"
+                    ),
+                    (
+                        0.75,
+                        "#D9F2FF"
+                    ),
+                    (
+                        1.00,
+                        "#FFFFFF"
+                    )
+                ]
+            ),
+            
             // ——— GPU Built‑ins (shader indices) ———
-            .init(name: "HSV",   builtInIndex: 0, stopsHex: [
-                (0.00, "#FF0000"), (0.17, "#FFFF00"), (0.33, "#00FF00"), (0.50, "#00FFFF"), (0.67, "#0000FF"), (0.83, "#FF00FF"), (1.00, "#FF0000")
-            ]),
-            .init(name: "Fire",  builtInIndex: 1, stopsHex: [
-                (0.00, "#000000"), (0.15, "#FF0000"), (0.50, "#FF7F00"), (0.85, "#FFFF00"), (1.00, "#FFFFFF")
-            ]),
-            .init(name: "Ocean", builtInIndex: 2, stopsHex: [
-                (0.00, "#000000"), (0.15, "#0033FF"), (0.45, "#1AB3B3"), (0.75, "#00FFFF"), (1.00, "#FFFFFF")
-            ]),
+            .init(
+                name: "HSV",
+                builtInIndex: 0,
+                stopsHex: [
+                    (
+                        0.00,
+                        "#FF0000"
+                    ),
+                    (
+                        0.17,
+                        "#FFFF00"
+                    ),
+                    (
+                        0.33,
+                        "#00FF00"
+                    ),
+                    (
+                        0.50,
+                        "#00FFFF"
+                    ),
+                    (
+                        0.67,
+                        "#0000FF"
+                    ),
+                    (
+                        0.83,
+                        "#FF00FF"
+                    ),
+                    (
+                        1.00,
+                        "#FF0000"
+                    )
+                ]
+            ),
+            .init(
+                name: "Fire",
+                builtInIndex: 1,
+                stopsHex: [
+                    (
+                        0.00,
+                        "#000000"
+                    ),
+                    (
+                        0.15,
+                        "#FF0000"
+                    ),
+                    (
+                        0.50,
+                        "#FF7F00"
+                    ),
+                    (
+                        0.85,
+                        "#FFFF00"
+                    ),
+                    (
+                        1.00,
+                        "#FFFFFF"
+                    )
+                ]
+            ),
+            .init(
+                name: "Ocean",
+                builtInIndex: 2,
+                stopsHex: [
+                    (
+                        0.00,
+                        "#000000"
+                    ),
+                    (
+                        0.15,
+                        "#0033FF"
+                    ),
+                    (
+                        0.45,
+                        "#1AB3B3"
+                    ),
+                    (
+                        0.75,
+                        "#00FFFF"
+                    ),
+                    (
+                        1.00,
+                        "#FFFFFF"
+                    )
+                ]
+            ),
             
             PaletteItem(
               name: "Vivid Neon",

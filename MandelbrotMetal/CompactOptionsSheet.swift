@@ -12,7 +12,7 @@ import SwiftUI
 import UIKit
 import simd
 
-// MARK: - Compact Options Sheet (iPhone)
+/// Compact Options Sheet (iPhone)
 struct CompactOptionsSheet: View {
     @Binding var currentPaletteName: String
     @Binding var showPalettePicker: Bool

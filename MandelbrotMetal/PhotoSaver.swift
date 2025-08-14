@@ -12,7 +12,6 @@ import SwiftUI
 import UIKit
 import simd
 
-
 enum PhotoSaveError: Error {
     case notAuthorized
     case writeFailed(Error?)

@@ -12,14 +12,14 @@ import SwiftUI
 import UIKit
 import simd
 
-// MARK: - High-Contrast Toggle Style
+/// High-Contrast Toggle Style
 struct AccessibleSwitchToggleStyle: ToggleStyle {
     var onColor: Color = .accentColor
     var offColor: Color = Color(UIColor.systemGray3).opacity(0.95)
     var knobColor: Color = .white
     var borderColor: Color = .black.opacity(0.25)
     var height: CGFloat = 28
-
+    
     func makeBody(configuration: Configuration) -> some View {
         let isOn = configuration.isOn
         let width = height * 1.75

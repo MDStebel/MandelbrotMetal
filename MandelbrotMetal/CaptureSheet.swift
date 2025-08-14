@@ -17,6 +17,7 @@ struct CaptureSheet: View {
     @Binding var snapRes: ContentView.SnapshotRes
     @Binding var customW: String
     @Binding var customH: String
+    
     let onConfirm: () -> Void
     let onClose: () -> Void
     let onCustomTap: () -> Void
