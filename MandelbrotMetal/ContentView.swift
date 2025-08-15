@@ -334,7 +334,7 @@ struct ContentView: View {
             }
             .sheet(isPresented: $showHelp) {
                 NavigationStack {
-                    HelpView()
+                    HelpSheetView()
                         .navigationTitle("Help")
                         .toolbar {
                             ToolbarItem(placement: .cancellationAction) { Button("Close") { showHelp = false } }
@@ -1254,4 +1254,89 @@ struct ShareSheet: UIViewControllerRepresentable {
         UIActivityViewController(activityItems: items, applicationActivities: nil)
     }
     func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
+}
+
+// MARK: - Inline Help (PNG-only capture + new features)
+struct HelpSheetView: View {
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                Group {
+                    Text("Overview")
+                        .font(.headline)
+                    Text("""
+                    Mandelbrot Metal is optimized for smooth deep zooms and clear exports. The renderer automatically increases precision at high zoom and can raise quality when idle.
+                    """)
+                }
+                Group {
+                    Text("Navigation")
+                        .font(.headline)
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("• **Pan**: drag with one finger.")
+                        Text("• **Zoom**: pinch. **Double‑tap** to zoom ×2 at the tap point.")
+                        Text("• The view **re-draws on rotation** and preserves the correct aspect ratio.")
+                    }
+                }
+                Group {
+                    Text("Deep Zoom & Quality")
+                        .font(.headline)
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("• **Deep precision** engages automatically at high zoom levels; no switch needed.")
+                        Text("• **High‑Quality Idle**: when enabled, quality increases briefly after you stop interacting (may use extra samples/iterations).")
+                    }
+                }
+                Group {
+                    Text("Iterations & Contrast")
+                        .font(.headline)
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("• **Iterations**: slider (100–5,000) with ±50 step buttons. Optional **Auto Iterations** adapts to zoom.")
+                        Text("• **Contrast**: 0.50–1.50. **Reset** restores contrast to **1.00** along with default view.")
+                    }
+                }
+                Group {
+                    Text("Palettes")
+                        .font(.headline)
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("• Built‑ins: HSV, Fire, Ocean. Plus **LUT palettes** from the picker (import gradients from Photos).")
+                        Text("• **Wide Color (P3)** and **LUT resolution** (256/1024 px) toggles affect LUT rendering quality.")
+                        Text("• The HUD shows the **current palette name**. Bookmarks save and restore the selected palette.")
+                    }
+                }
+                Group {
+                    Text("Bookmarks")
+                        .font(.headline)
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("• Save the current view (center, zoom, iterations, **contrast**, and palette).")
+                        Text("• Loading a bookmark restores visual settings, including the palette name and contrast.")
+                    }
+                }
+                Group {
+                    Text("Capture / Export")
+                        .font(.headline)
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("• Tap **Capture Image** to export the current view.")
+                        Text("• Resolutions: **Canvas**, **4K**, **6K**, **8K**, or **Custom**. The image **scales to fit** while preserving aspect.")
+                        Text("• **Format**: Always **PNG** (high quality, lossless). Files are shared/saved via the iOS share sheet.")
+                        Text("• Color: uses the active palette; wide‑gamut displays are respected when available.")
+                    }
+                }
+                Group {
+                    Text("HUD")
+                        .font(.headline)
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("• Shows Center, Scale, Iterations, **SSAA status when idle** (e.g., “SSAA×2”), and the **Palette name**.")
+                    }
+                }
+                Group {
+                    Text("Troubleshooting")
+                        .font(.headline)
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("• A small warning banner appears if the renderer falls back (e.g., missing LUT). Try another palette or re‑import the gradient.")
+                    }
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 20)
+        }
+    }
 }
