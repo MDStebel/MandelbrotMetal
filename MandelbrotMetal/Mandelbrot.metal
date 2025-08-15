@@ -20,7 +20,7 @@ struct MandelbrotUniforms {
 
     int    subpixelSamples; // 1 or 4
     int    palette;         // 0=HSV,1=Fire,2=Ocean,3=LUT
-    int    deepMode;        // 0=float mapping, 1=double-single mapping
+    int    deepMode;        // 0=float, 1=double‑single (DS), 2=double‑double (DD)
     int    _pad0;           // alignment padding
 
     float  contrast;        // contrast shaping for normalized t (1.0 = neutral)
@@ -47,6 +47,31 @@ inline float3 lerp3(float3 a, float3 b, float t) { return a + (b - a) * t; }
 inline float  saturate(float x) { return clamp(x, 0.0f, 1.0f); }
 
 
+// =============================================================
+// SSAA jitter patterns (support 1×, 4×, 9×, and 16× samples)
+// "×2/×3/×4" HUD refers to the root of the sample count (2×2, 3×3, 4×4)
+// =============================================================
+constant float2 OFFSETS_4[4] = {
+    float2(-0.25, -0.25),
+    float2( 0.25, -0.25),
+    float2(-0.25,  0.25),
+    float2( 0.25,  0.25)
+};
+
+// 3×3 grid at ±1/3 with center (0,0)
+constant float2 OFFSETS_9[9] = {
+    float2(-0.3333333, -0.3333333), float2(0.0, -0.3333333), float2( 0.3333333, -0.3333333),
+    float2(-0.3333333,  0.0      ), float2(0.0,  0.0      ), float2( 0.3333333,  0.0      ),
+    float2(-0.3333333,  0.3333333), float2(0.0,  0.3333333), float2( 0.3333333,  0.3333333)
+};
+
+// 4×4 grid at ±3/8 and ±1/8 (centered)
+constant float2 OFFSETS_16[16] = {
+    float2(-0.375, -0.375), float2(-0.125, -0.375), float2( 0.125, -0.375), float2( 0.375, -0.375),
+    float2(-0.375, -0.125), float2(-0.125, -0.125), float2( 0.125, -0.125), float2( 0.375, -0.125),
+    float2(-0.375,  0.125), float2(-0.125,  0.125), float2( 0.125,  0.125), float2( 0.375,  0.125),
+    float2(-0.375,  0.375), float2(-0.125,  0.375), float2( 0.125,  0.375), float2( 0.375,  0.375)
+};
 
 // =============================================================
 // Simple palettes + optional LUT
@@ -306,27 +331,31 @@ kernel void mandelbrotKernel(
 
     constexpr sampler samp(address::clamp_to_edge, filter::linear);
 
-    // 2×2 SSAA (rotated grid)
-    const float2 offsets[4] = {
-        float2( 0.25,  0.25),
-        float2(-0.25,  0.25),
-        float2( 0.25, -0.25),
-        float2(-0.25, -0.25)
-    };
-    int spp = max(1, u.subpixelSamples);
+    int spp = clamp(u.subpixelSamples, 1, 16);
 
     float3 acc = float3(0.0);
 
     for (int s = 0; s < spp; ++s) {
+        float2 jitter = float2(0.0, 0.0);
+        if (spp == 4) {
+            jitter = OFFSETS_4[s & 3];
+        } else if (spp == 9) {
+            jitter = OFFSETS_9[s % 9];
+        } else if (spp == 16) {
+            jitter = OFFSETS_16[s & 15];
+        } else if (spp > 1) {
+            // Fallback to 2×2 pattern for any other spp count
+            jitter = OFFSETS_4[s & 3];
+        }
+
         if (u.deepMode != 0) {
             // Map in DS; DD path consumes DS inputs via dd_from_ds.
             ds2 cx, cy; mapComplexDS(gid, u, cx, cy);
             if (spp > 1) {
                 ds2 sx = { u.stepHi.x, u.stepLo.x };
                 ds2 sy = { u.stepHi.y, u.stepLo.y };
-                float2 off = offsets[s];
-                cx = ds_add(cx, ds_mul_f(sx, off.x));
-                cy = ds_add(cy, ds_mul_f(sy, off.y));
+                cx = ds_add(cx, ds_mul_f(sx, jitter.x));
+                cy = ds_add(cy, ds_mul_f(sy, jitter.y));
             }
 
             // Deep modes do NOT use float interior tests (too lossy at high zooms).
@@ -354,7 +383,7 @@ kernel void mandelbrotKernel(
             }
         } else {
             float2 c = mapComplexF(gid, u);
-            if (spp > 1) c += u.step * offsets[s];
+            if (spp > 1) c += u.step * jitter;
             if (!inInteriorF(c)) {
                 float zx, zy;
                 int it = iterateMandelF(c, max(1, u.maxIt), zx, zy);

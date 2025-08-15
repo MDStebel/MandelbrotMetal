@@ -70,15 +70,57 @@ final class MandelbrotRenderer: NSObject, MTKViewDelegate {
     private var precisionOverride: Int32? = nil
     
     private weak var mtkViewRef: MTKView?
+
+    /// Remember last zoom to recompute SSAA when interaction toggles
+    private var lastScalePPU: Double = 0.0
+    /// Anchor zoom at which the current SSAA tier was last committed
+    private var ssaaAnchorZ: Double = 0.0
     
-    /// Exposes whether sub‑pixel SSAA is active (4 samples)
+    /// Exposes whether sub‑pixel SSAA is active (≥4 samples)
     var isSSAAActive: Bool { uniforms.subpixelSamples >= 4 }
+    /// Current SSAA sample count (1, 4, 9, or 16)
+    var ssaaSamples: Int { Int(uniforms.subpixelSamples) }
+
+    /// Current SSAA factor (1, 2, 3, 4) derived from samples (1, 4, 9, 16)
+    var ssaaFactor: Int {
+        switch uniforms.subpixelSamples {
+        case 4:  return 2
+        case 9:  return 3
+        case 16: return 4
+        default: return 1
+        }
+    }
+
+    /// Returns current SSAA state for HUD: (active, samples, factor)
+    func ssaaInfo() -> (active: Bool, samples: Int, factor: Int) {
+        let samples = Int(uniforms.subpixelSamples)
+        let factor: Int
+        switch samples {
+        case 4:  factor = 2
+        case 9:  factor = 3
+        case 16: factor = 4
+        default: factor = 1
+        }
+        return (samples >= 4, samples, factor)
+    }
     
     var needsRender = true
     
     // Tunables
     private let deepZoomThreshold: Double = 1.0e4 // switch to DS mapping here
     private let ddZoomThreshold: Double = 1.0e7   // switch to DD mapping here
+
+    /// SSAA thresholds with hysteresis (idle)
+    private let ssaaIdleUp:    [Double: Int32] = [1.0e5: 4, 1.0e7: 9, 1.0e9: 16]
+    private let ssaaIdleDown:  [Double: Int32] = [7.5e4: 1, 7.5e6: 4, 7.5e8: 9] // 0.75× bands
+
+    /// SSAA thresholds with hysteresis (interactive/dragging)
+    private let ssaaLiveUp:    [Double: Int32] = [1.0e6: 4, 1.0e8: 9]
+    private let ssaaLiveDown:  [Double: Int32] = [7.5e5: 1, 7.5e7: 4]
+
+    /// Additional debounce to prevent SSAA bounce: require a meaningful zoom delta
+    private let ssaaMinRatioUp: Double = 1.6   // must zoom in by ≥1.6× since last tier change
+    private let ssaaMinRatioDown: Double = 1.6 // must zoom out by ≥1.6× since last tier change
     
     private var uniforms = MandelbrotUniforms(
         origin: .zero,
@@ -168,6 +210,74 @@ final class MandelbrotRenderer: NSObject, MTKViewDelegate {
         print("MandelbrotRenderer.init: complete. framebufferOnly=\(mtkView.framebufferOnly)")
     }
     
+    // MARK: - SSAA Tier Selection
+    /// Decide SSAA tier (samples per pixel: 1,4,9,16) for given zoom and state, with hysteresis.
+    private func chooseSSAA(z: Double,
+                            wasZ: Double,
+                            prevSamples: Int32,
+                            idle: Bool,
+                            deepMode: Int32) -> Int32 {
+        // Select the correct threshold tables
+        let up   = idle ? ssaaIdleUp   : ssaaLiveUp
+        let down = idle ? ssaaIdleDown : ssaaLiveDown
+
+        // Direction checks with a small epsilon
+        let eps = 1e-6
+        let zoomingIn  = z > wasZ + eps
+        let zoomingOut = z < wasZ - eps
+
+        // Helper to compute the desired tier for a given table.
+        func tier(for value: Double, using table: [Double: Int32]) -> Int32 {
+            var chosen: Int32 = 1
+            for (th, t) in table.sorted(by: { $0.key < $1.key }) {
+                if value >= th { chosen = t }
+            }
+            return chosen
+        }
+
+        var proposedUp = tier(for: z, using: up)
+        var proposedDown = tier(for: z, using: down)
+
+        // Cap 16-sample tier unless we're in true DD (deepMode==2)
+        if deepMode < 2 && proposedUp == 16 { proposedUp = 9 }
+        if deepMode < 2 && proposedDown == 16 { proposedDown = 9 }
+
+        // Hysteresis: only allow increases while zooming IN, and decreases while zooming OUT.
+        var result = prevSamples
+        if zoomingIn {
+            result = max(prevSamples, proposedUp)
+        } else if zoomingOut {
+            result = min(prevSamples, proposedDown)
+        } else {
+            // No clear direction: hold the previous tier unless we crossed far beyond "up"
+            result = max(prevSamples, proposedUp)
+        }
+
+        // --- Additional stabilization using an anchor zoom value ---
+        // Only allow tier increases if we've zoomed in *enough* since the last change
+        if result > prevSamples {
+            // If this is the first time, initialize the anchor
+            if ssaaAnchorZ <= 0 { ssaaAnchorZ = max(1.0, z) }
+            let required = max(ssaaAnchorZ * ssaaMinRatioUp, wasZ * 1.05) // also avoid micro wiggles
+            if z < required {
+                result = prevSamples // not enough zoom-in to warrant a jump
+            }
+        }
+        // Only allow tier decreases if we've zoomed out *enough* since the last change
+        if result < prevSamples {
+            if ssaaAnchorZ <= 0 { ssaaAnchorZ = max(1.0, z) }
+            let required = min(ssaaAnchorZ / ssaaMinRatioDown, wasZ / 1.05)
+            if z > required {
+                result = prevSamples // not enough zoom-out to drop a tier
+            }
+        }
+        // If we truly changed the tier, move the anchor to the new zoom
+        if result != prevSamples {
+            ssaaAnchorZ = max(1.0, z)
+        }
+        return result
+    }
+
     // MARK: - Public knobs (called from UI)
     /// Toggle fast/idle quality (keeps full resolution; adjusts iteration count only).
     func setInteractive(_ on: Bool, baseIterations: Int) {
@@ -179,17 +289,21 @@ final class MandelbrotRenderer: NSObject, MTKViewDelegate {
             uniforms.maxIt = Int32(max(1, baseIterations))
             refinePending = highQualityIdle
         }
-        // Interactive => no SSAA; Idle => enable SSAA×2 (4 samples)
-        if on {
-            if uniforms.subpixelSamples != 1 {
-                uniforms.subpixelSamples = 1
-                NotificationCenter.default.post(name: .SSAAStateChanged, object: self, userInfo: ["active": false])
-            }
-        } else {
-            if uniforms.subpixelSamples < 4 {
-                uniforms.subpixelSamples = 4
-                NotificationCenter.default.post(name: .SSAAStateChanged, object: self, userInfo: ["active": true])
-            }
+        // Recompute SSAA from last zoom using hysteresis; do not force a downshift due to the toggle.
+        let prev = uniforms.subpixelSamples
+        let target = chooseSSAA(z: lastScalePPU,
+                                wasZ: lastScalePPU,     // no direction implied by toggle
+                                prevSamples: prev,
+                                idle: !on && highQualityIdle,
+                                deepMode: uniforms.deepMode)
+        let newSamples = max(prev, target)
+        if newSamples != prev {
+            uniforms.subpixelSamples = newSamples
+            NotificationCenter.default.post(name: .SSAAStateChanged,
+                                            object: self,
+                                            userInfo: ["active": (newSamples >= 4),
+                                                       "samples": Int(newSamples),
+                                                       "factor": self.ssaaFactor])
         }
         needsRender = true
         DispatchQueue.main.async { [weak self] in self?.mtkViewRef?.setNeedsDisplay() }
@@ -261,7 +375,8 @@ final class MandelbrotRenderer: NSObject, MTKViewDelegate {
                      sizePts: CGSize,
                      screenScale: CGFloat,
                      maxIterations: Int) {
-        
+        // Remember previous zoom for SSAA monotonicity logic.
+        let wasScalePPU = lastScalePPU
         guard sizePts.width.isFinite, sizePts.height.isFinite, screenScale.isFinite else { return }
         
         let pixelW = max(1, Int((sizePts.width * screenScale).rounded()))
@@ -269,7 +384,7 @@ final class MandelbrotRenderer: NSObject, MTKViewDelegate {
         uniforms.size = SIMD2<UInt32>(UInt32(pixelW), UInt32(pixelH))
         uniforms.maxIt = Int32(max(1, maxIterations))
         uniforms.pixelStep = 1
-        let prevSSAA = (uniforms.subpixelSamples >= 4)
+//        let prevSSAA = (uniforms.subpixelSamples >= 4)
         
         let invScale = 1.0 / max(1e-12, scalePixelsPerUnit)
         
@@ -284,23 +399,35 @@ final class MandelbrotRenderer: NSObject, MTKViewDelegate {
             uniforms.deepMode = 0   // Float path
         }
         
-        // Prefer SSAA in idle; during interaction only enable for very high zooms
-        let targetSSAA: Int32
-        if highQualityIdle {
-            targetSSAA = 4
-        } else {
-            // Lower threshold so SSAA engages earlier
-            targetSSAA = (scalePixelsPerUnit >= 1.0e4) ? 4 : 1
-        }
-        if uniforms.subpixelSamples != targetSSAA {
-            uniforms.subpixelSamples = targetSSAA
-            let nowSSAA = (targetSSAA >= 4)
-            if nowSSAA != prevSSAA {
+        // Pick SSAA based on zoom, previous zoom, previous samples, idle state and precision mode.
+        let prevSamples = uniforms.subpixelSamples
+        let proposed = chooseSSAA(z: scalePixelsPerUnit,
+                                  wasZ: wasScalePPU,
+                                  prevSamples: prevSamples,
+                                  idle: highQualityIdle,
+                                  deepMode: uniforms.deepMode)
+
+        if uniforms.subpixelSamples != proposed {
+            let before = uniforms.subpixelSamples
+            uniforms.subpixelSamples = proposed
+            let factorBefore: Int = (before == 16 ? 4 : (before == 9 ? 3 : (before == 4 ? 2 : 1)))
+            let factorAfter:  Int = (proposed == 16 ? 4 : (proposed == 9 ? 3 : (proposed == 4 ? 2 : 1)))
+//            print(String(format: "[SSAA] z=%.3e was=%.3e deep=%d idle=%@ prev=%d -> proposed=%d",
+//                         scalePixelsPerUnit, wasScalePPU, uniforms.deepMode, String(highQualityIdle), before, proposed))
+            if factorAfter != factorBefore {
                 NotificationCenter.default.post(name: .SSAAStateChanged,
                                                 object: self,
-                                                userInfo: ["active": nowSSAA])
+                                                userInfo: [
+                                                    "active": (proposed >= 4),
+                                                    "samples": Int(proposed),
+                                                    "factor": factorAfter
+                                                ])
             }
+            ssaaAnchorZ = max(1.0, scalePixelsPerUnit)
         }
+
+        // Update lastScalePPU for next time
+        lastScalePPU = scalePixelsPerUnit
         
         // Base mapping
         let halfW = 0.5 * Double(pixelW)
@@ -399,6 +526,33 @@ final class MandelbrotRenderer: NSObject, MTKViewDelegate {
             uniforms.originLo = SIMD2<Float>(oLx, oLy)
             uniforms.stepHi   = SIMD2<Float>(sHx, sHy)
             uniforms.stepLo   = SIMD2<Float>(sLx, sLy)
+
+            // Ensure SSAA is reasonable for the first frame
+            lastScalePPU = Double(dw) / 3.5
+            let firstSSAA = chooseSSAA(
+                z: lastScalePPU,
+                wasZ: lastScalePPU,
+                prevSamples: uniforms.subpixelSamples,
+                idle: highQualityIdle,
+                deepMode: uniforms.deepMode
+            )
+            uniforms.subpixelSamples = firstSSAA
+            ssaaAnchorZ = max(1.0, lastScalePPU)
+            // Notify initial SSAA state for HUD
+            let initialFactor: Int
+            switch firstSSAA {
+            case 4:  initialFactor = 2
+            case 9:  initialFactor = 3
+            case 16: initialFactor = 4
+            default: initialFactor = 1
+            }
+            NotificationCenter.default.post(name: .SSAAStateChanged,
+                                            object: self,
+                                            userInfo: [
+                                                "active": (firstSSAA >= 4),
+                                                "samples": Int(firstSSAA),
+                                                "factor": initialFactor
+                                            ])
         }
         
         validateBindingsAndFallback()
@@ -446,12 +600,7 @@ final class MandelbrotRenderer: NSObject, MTKViewDelegate {
         
         drawable.present()
         
-        // Ensure HUD sees initial SSAA state after first size seed
-        if uniforms.size.x != 0 && uniforms.size.y != 0 {
-            NotificationCenter.default.post(name: .SSAAStateChanged,
-                                            object: self,
-                                            userInfo: ["active": (uniforms.subpixelSamples >= 4)])
-        }
+        // (Removed: No unconditional SSAA HUD notification here; HUD only updates on actual SSAA changes.)
         
         cmd.addCompletedHandler { [weak self] _ in
             guard let self else { return }
@@ -829,5 +978,17 @@ final class MandelbrotRenderer: NSObject, MTKViewDelegate {
         }
         self.paletteTexture = tex
         self.needsRender = true
+    }
+}
+
+extension MandelbrotRenderer {
+    /// Convenience: reset contrast to default (1.0) and trigger a redraw.
+    func resetContrast() {
+        setContrast(1.0)
+    }
+
+    /// Read current contrast value (1.0 = neutral)
+    func getContrast() -> Float {
+        return uniforms.contrast
     }
 }

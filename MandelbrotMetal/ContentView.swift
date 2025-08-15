@@ -37,8 +37,92 @@ struct ContentView: View {
     @State private var showOptionsSheet = false
     @State private var showCaptureSheet = false
     @State private var isCapturing = false
+    @State private var ssaaSamples: Int = 1
+    @State private var showSSAACHUD: Bool = false
+
+    // Treat SSAA as an idle-only enhancement. During interaction (or when HQ Idle is off),
+    // the HUD should show no SSAA badge.
+    private func isIdleForSSAA() -> Bool {
+        return highQualityIdleRender && !isInteracting
+    }
+
+    // Prefer the renderer's report; otherwise infer from scale using the same thresholds
+    private func ssaaFactorForScale(_ scale: Double) -> Int {
+        // If we’re not idle, don’t show any SSAA (renderer renders at 1× while interacting)
+        if !isIdleForSSAA() { return 1 }
+        // Keep these thresholds in sync with renderer logic (idle quality only)
+        if scale >= 5.0e9 { return 4 }   // SSAA×4 at extreme zoom
+        if scale >= 2.0e8 { return 3 }   // SSAA×3 at very high zoom
+        if scale >= 5.0e6 { return 2 }   // SSAA×2 at high zoom
+        return 1
+    }
+
+    private func currentSSAAFactor() -> Int {
+        // Prefer renderer’s last-used sample count (samples per pixel).
+        if isIdleForSSAA(), let r = vm.renderer?.ssaaSamples {
+            // r may be 1,4,9,16 (samples/pixel) or already 1,2,3,4 (factor)
+            if r == 1 || r == 2 || r == 3 || r == 4 { return r }
+            let root = Int(round(sqrt(Double(r))))
+            if root * root == r, (2...4).contains(root) { return root }
+        }
+        // Fallback: infer from current scale (idle only)
+        return ssaaFactorForScale(vm.scalePixelsPerUnit)
+    }
     
-    struct Bookmark: Codable, Identifiable { var id = UUID(); var name: String; var center: SIMD2<Double>; var scale: Double; var palette: Int; var deep: Bool; var perturb: Bool }
+    struct Bookmark: Codable, Identifiable {
+        var id = UUID()
+        var name: String
+        var center: SIMD2<Double>
+        var scale: Double
+        var palette: Int
+        var deep: Bool
+        var perturb: Bool
+        var iterations: Int
+        var contrast: Double
+
+        enum CodingKeys: String, CodingKey {
+            case id, name, center, scale, palette, deep, perturb, iterations, contrast
+        }
+
+        init(id: UUID = UUID(), name: String, center: SIMD2<Double>, scale: Double, palette: Int, deep: Bool, perturb: Bool, iterations: Int, contrast: Double) {
+            self.id = id
+            self.name = name
+            self.center = center
+            self.scale = scale
+            self.palette = palette
+            self.deep = deep
+            self.perturb = perturb
+            self.iterations = iterations
+            self.contrast = contrast
+        }
+
+        // Backward-compatible decoding for older saved bookmarks
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            self.id = try c.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+            self.name = try c.decode(String.self, forKey: .name)
+            self.center = try c.decode(SIMD2<Double>.self, forKey: .center)
+            self.scale = try c.decode(Double.self, forKey: .scale)
+            self.palette = try c.decode(Int.self, forKey: .palette)
+            self.deep = try c.decodeIfPresent(Bool.self, forKey: .deep) ?? true
+            self.perturb = try c.decodeIfPresent(Bool.self, forKey: .perturb) ?? false
+            self.iterations = try c.decodeIfPresent(Int.self, forKey: .iterations) ?? 100
+            self.contrast = try c.decodeIfPresent(Double.self, forKey: .contrast) ?? 1.0
+        }
+
+        func encode(to encoder: Encoder) throws {
+            var c = encoder.container(keyedBy: CodingKeys.self)
+            try c.encode(id, forKey: .id)
+            try c.encode(name, forKey: .name)
+            try c.encode(center, forKey: .center)
+            try c.encode(scale, forKey: .scale)
+            try c.encode(palette, forKey: .palette)
+            try c.encode(deep, forKey: .deep)
+            try c.encode(perturb, forKey: .perturb)
+            try c.encode(iterations, forKey: .iterations)
+            try c.encode(contrast, forKey: .contrast)
+        }
+    }
     @State private var bookmarks: [Bookmark] = []
     @State private var showAddBookmark = false
     @State private var newBookmarkName: String = ""
@@ -83,9 +167,9 @@ struct ContentView: View {
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
                         .transition(.opacity.combined(with: .move(edge: .top)))
                 }
-                // Tiny HUD chip for SSAA status
-                if (vm.renderer?.isSSAAActive ?? false) {
-                    Text("SSAA×2")
+                // Tiny HUD chip for SSAA status (dynamic across 2x/3x/4x) — disabled by default
+                if showSSAACHUD, isIdleForSSAA(), currentSSAAFactor() > 1 {
+                    Text("SSAA×\(currentSSAAFactor())")
                         .font(.caption2).bold()
                         .padding(.horizontal, 8)
                         .padding(.vertical, 4)
@@ -95,7 +179,7 @@ struct ContentView: View {
                         .padding(.trailing, 10)
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
                         .transition(.opacity)
-                        .accessibilityLabel("Super sampling active: two by two")
+                        .accessibilityLabel("Super‑sampling SSAA×\(currentSSAAFactor())")
                 }
                 floatingControls(geo)
                     .padding(.horizontal, 12)
@@ -274,12 +358,16 @@ struct ContentView: View {
                         .toolbar {
                             ToolbarItem(placement: .cancellationAction) { Button("Cancel") { showAddBookmark = false } }
                             ToolbarItem(placement: .confirmationAction) { Button("Save") {
-                                let bm = Bookmark(name: newBookmarkName.isEmpty ? "Bookmark \(bookmarks.count+1)" : newBookmarkName,
-                                                  center: vm.center,
-                                                  scale: vm.scalePixelsPerUnit,
-                                                  palette: palette,
-                                                  deep: true,
-                                                  perturb: false)
+                                let bm = Bookmark(
+                                    name: newBookmarkName.isEmpty ? "Bookmark \(bookmarks.count+1)" : newBookmarkName,
+                                    center: vm.center,
+                                    scale: vm.scalePixelsPerUnit,
+                                    palette: palette,
+                                    deep: true,
+                                    perturb: false,
+                                    iterations: vm.maxIterations,
+                                    contrast: contrast
+                                )
                                 bookmarks.append(bm)
                                 saveBookmarks()
                                 showAddBookmark = false
@@ -290,6 +378,14 @@ struct ContentView: View {
             .sheet(isPresented: .constant(false)) { EmptyView() } // placeholder
             .sheet(isPresented: $showOptionsSheet) {
                 optionsSheet()
+            }
+            .onReceive(Timer.publish(every: 0.25, on: .main, in: .common).autoconnect()) { _ in
+                let newFactor = currentSSAAFactor()
+                if newFactor != ssaaSamples {
+                    withAnimation(.easeInOut(duration: 0.15)) {
+                        ssaaSamples = newFactor
+                    }
+                }
             }
             .navigationTitle("Mandelbrot Metal")
             .navigationBarTitleDisplayMode(.inline)
@@ -713,6 +809,12 @@ private func optionsSheet() -> some View {
         )
     }
     
+    @inline(__always)
+    private func ssaaLabel(_ factor: Int) -> String? {
+        if factor <= 1 { return nil }
+        return "SSAA×\(factor)"
+    }
+
     private func fmtZoom(_ x: Double) -> String {
         let f = NumberFormatter()
         f.numberStyle = .decimal
@@ -841,6 +943,14 @@ private func optionsSheet() -> some View {
         vm.center = bm.center
         vm.scalePixelsPerUnit = bm.scale
         palette = bm.palette
+        // Restore iterations (clamped to UI range) and contrast
+        let it = min(5000, max(100, bm.iterations))
+        vm.maxIterations = it
+        vm.renderer?.setMaxIterations(it)
+
+        contrast = bm.contrast
+        vm.renderer?.setContrast(Float(contrast))
+
         vm.pushViewport(currentPointsSize(size), screenScale: currentScreenScale())
         vm.renderer?.setPalette(palette)
         vm.renderer?.setDeepZoom(true)
