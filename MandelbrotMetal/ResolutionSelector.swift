@@ -14,15 +14,15 @@ import simd
 
 // MARK: - Resolution Selector (Segmented)
 struct ResolutionSelector: View {
-    @Binding var selection: ContentView.SnapshotRes
+    @Binding var selection: SnapshotRes
 
     var body: some View {
         Picker("Resolution", selection: $selection) {
-            Text("Canvas").tag(ContentView.SnapshotRes.canvas)
-            Text("4K").tag(ContentView.SnapshotRes.r4k)
-            Text("6K").tag(ContentView.SnapshotRes.r6k)
-            Text("8K").tag(ContentView.SnapshotRes.r8k)
-            Text("Custom").tag(ContentView.SnapshotRes.custom)
+            Text("Canvas").tag(SnapshotRes.canvas)
+            Text("4K").tag(SnapshotRes.r4k)
+            Text("6K").tag(SnapshotRes.r6k)
+            Text("8K").tag(SnapshotRes.r8k)
+            Text("Custom").tag(SnapshotRes.custom)
         }
         .pickerStyle(.segmented)
         .lineLimit(1)

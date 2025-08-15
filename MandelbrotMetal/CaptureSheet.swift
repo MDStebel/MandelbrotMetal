@@ -14,7 +14,7 @@ import simd
 
 // MARK: - Capture Sheet
 struct CaptureSheet: View {
-    @Binding var snapRes: ContentView.SnapshotRes
+    @Binding var snapRes: SnapshotRes
     @Binding var customW: String
     @Binding var customH: String
     

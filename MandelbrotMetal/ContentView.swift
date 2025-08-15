@@ -12,6 +12,87 @@ import SwiftUI
 import UIKit
 import simd
 
+// MARK: - Top-level Bookmark (shared across files)
+struct Bookmark: Codable, Identifiable {
+    var id = UUID()
+    var name: String
+    var center: SIMD2<Double>
+    var scale: Double
+    var palette: Int
+    var paletteName: String?
+    var deep: Bool
+    var perturb: Bool
+    var iterations: Int
+    var contrast: Double
+
+    enum CodingKeys: String, CodingKey {
+        case id, name, center, scale, palette, paletteName, deep, perturb, iterations, contrast
+    }
+
+    init(
+        id: UUID = UUID(),
+        name: String,
+        center: SIMD2<Double>,
+        scale: Double,
+        palette: Int,
+        paletteName: String? = nil,
+        deep: Bool,
+        perturb: Bool,
+        iterations: Int,
+        contrast: Double
+    ) {
+        self.id = id
+        self.name = name
+        self.center = center
+        self.scale = scale
+        self.palette = palette
+        self.paletteName = paletteName
+        self.deep = deep
+        self.perturb = perturb
+        self.iterations = iterations
+        self.contrast = contrast
+    }
+
+    // Backward-compatible decoding for older saved bookmarks
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.id = try c.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        self.name = try c.decode(String.self, forKey: .name)
+        self.center = try c.decode(SIMD2<Double>.self, forKey: .center)
+        self.scale = try c.decode(Double.self, forKey: .scale)
+        self.palette = try c.decode(Int.self, forKey: .palette)
+        self.paletteName = try c.decodeIfPresent(String.self, forKey: .paletteName)
+        self.deep = try c.decodeIfPresent(Bool.self, forKey: .deep) ?? true
+        self.perturb = try c.decodeIfPresent(Bool.self, forKey: .perturb) ?? false
+        self.iterations = try c.decodeIfPresent(Int.self, forKey: .iterations) ?? 100
+        self.contrast = try c.decodeIfPresent(Double.self, forKey: .contrast) ?? 1.0
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(id, forKey: .id)
+        try c.encode(name, forKey: .name)
+        try c.encode(center, forKey: .center)
+        try c.encode(scale, forKey: .scale)
+        try c.encode(palette, forKey: .palette)
+        try c.encodeIfPresent(paletteName, forKey: .paletteName)
+        try c.encode(deep, forKey: .deep)
+        try c.encode(perturb, forKey: .perturb)
+        try c.encode(iterations, forKey: .iterations)
+        try c.encode(contrast, forKey: .contrast)
+    }
+}
+
+// MARK: - Top-level snapshot resolution enum
+enum SnapshotRes: String, CaseIterable, Identifiable {
+    case canvas = "Canvas"
+    case r4k    = "4K (3840×2160)"
+    case r6k    = "6K (5760×3240)"
+    case r8k    = "8K (7680×4320)"
+    case custom = "Custom…"
+    var id: String { rawValue }
+}
+
 struct ContentView: View {
     @Environment(\.horizontalSizeClass) private var hSize
     @Environment(\.verticalSizeClass) private var vSize
@@ -69,75 +150,6 @@ struct ContentView: View {
         return ssaaFactorForScale(vm.scalePixelsPerUnit)
     }
     
-    struct Bookmark: Codable, Identifiable {
-        var id = UUID()
-        var name: String
-        var center: SIMD2<Double>
-        var scale: Double
-        var palette: Int
-        var paletteName: String?
-        var deep: Bool
-        var perturb: Bool
-        var iterations: Int
-        var contrast: Double
-
-        enum CodingKeys: String, CodingKey {
-            case id, name, center, scale, palette, paletteName, deep, perturb, iterations, contrast
-        }
-
-        init(
-            id: UUID = UUID(),
-            name: String,
-            center: SIMD2<Double>,
-            scale: Double,
-            palette: Int,
-            paletteName: String? = nil,
-            deep: Bool,
-            perturb: Bool,
-            iterations: Int,
-            contrast: Double
-        ) {
-            self.id = id
-            self.name = name
-            self.center = center
-            self.scale = scale
-            self.palette = palette
-            self.paletteName = paletteName
-            self.deep = deep
-            self.perturb = perturb
-            self.iterations = iterations
-            self.contrast = contrast
-        }
-
-        // Backward-compatible decoding for older saved bookmarks
-        init(from decoder: Decoder) throws {
-            let c = try decoder.container(keyedBy: CodingKeys.self)
-            self.id = try c.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
-            self.name = try c.decode(String.self, forKey: .name)
-            self.center = try c.decode(SIMD2<Double>.self, forKey: .center)
-            self.scale = try c.decode(Double.self, forKey: .scale)
-            self.palette = try c.decode(Int.self, forKey: .palette)
-            self.paletteName = try c.decodeIfPresent(String.self, forKey: .paletteName)
-            self.deep = try c.decodeIfPresent(Bool.self, forKey: .deep) ?? true
-            self.perturb = try c.decodeIfPresent(Bool.self, forKey: .perturb) ?? false
-            self.iterations = try c.decodeIfPresent(Int.self, forKey: .iterations) ?? 100
-            self.contrast = try c.decodeIfPresent(Double.self, forKey: .contrast) ?? 1.0
-        }
-
-        func encode(to encoder: Encoder) throws {
-            var c = encoder.container(keyedBy: CodingKeys.self)
-            try c.encode(id, forKey: .id)
-            try c.encode(name, forKey: .name)
-            try c.encode(center, forKey: .center)
-            try c.encode(scale, forKey: .scale)
-            try c.encode(palette, forKey: .palette)
-            try c.encodeIfPresent(paletteName, forKey: .paletteName)
-            try c.encode(deep, forKey: .deep)
-            try c.encode(perturb, forKey: .perturb)
-            try c.encode(iterations, forKey: .iterations)
-            try c.encode(contrast, forKey: .contrast)
-        }
-    }
     @State private var bookmarks: [Bookmark] = []
     @State private var showAddBookmark = false
     @State private var newBookmarkName: String = ""
@@ -146,14 +158,6 @@ struct ContentView: View {
     @State private var useDisplayP3 = true
     @State private var lutWidth = 1024
 
-    enum SnapshotRes: String, CaseIterable, Identifiable {
-        case canvas = "Canvas"
-        case r4k    = "4K (3840×2160)"
-        case r6k    = "6K (5760×3240)"
-        case r8k    = "8K (7680×4320)"
-        case custom = "Custom…"
-        var id: String { rawValue }
-    }
     @State private var snapRes: SnapshotRes = .r4k
     @State private var customW: String = "3840"
     @State private var customH: String = "2160"
@@ -164,269 +168,399 @@ struct ContentView: View {
     private let kPaletteNameKey = "palette_name_v1"
     private let kHQIdleKey = "hq_idle_render_v1"
     
-    var body: some View {
-        NavigationStack { GeometryReader { geo in
-            ZStack {
-                fractalCanvas(geo)
-                hud
+    @ViewBuilder
+    private func mainContent(_ geo: GeometryProxy) -> some View {
+        ZStack {
+            fractalCanvas(geo)
+            hud
+                .padding(10)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            if let banner = fallbackBanner {
+                Text("⚠️ \(banner)")
+                    .font(.caption2)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .background(.ultraThinMaterial, in: Capsule())
+                    .overlay(Capsule().strokeBorder(.white.opacity(0.2)))
                     .padding(10)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                if let banner = fallbackBanner {
-                    Text("⚠️ \(banner)")
-                        .font(.caption2)
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 6)
-                        .background(.ultraThinMaterial, in: Capsule())
-                        .overlay(Capsule().strokeBorder(.white.opacity(0.2)))
-                        .padding(10)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
-                        .transition(.opacity.combined(with: .move(edge: .top)))
-                }
-                floatingControls(geo)
-                    .padding(.horizontal, 12)
-                    .padding(.bottom, 8)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
-                // Progress overlay during capture
-                if isCapturing {
-                    VStack(spacing: 12) {
-                        ProgressView("Rendering…")
-                            .progressViewStyle(.circular)
-                        Text("Preparing image, please wait")
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                    }
-                    .padding(20)
-                    .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-                    .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(.white.opacity(0.15)))
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
-                }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+                    .transition(.opacity .combined(with: .move(edge: .top)))
             }
-            .onAppear {
-                if let s = vm.loadState() {
-                    // Deep Zoom is always on now; ignore saved flag
-                    palette = s.palette
-                    contrast = s.contrast
+            floatingControls(geo)
+                .padding(.horizontal, 12)
+                .padding(.bottom, 8)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+            // Progress overlay during capture
+            if isCapturing {
+                VStack(spacing: 12) {
+                    ProgressView("Rendering…")
+                        .progressViewStyle(.circular)
+                    Text("Preparing image, please wait")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
                 }
-                vm.pushViewport(currentPointsSize(geo.size), screenScale: currentScreenScale())
-                vm.requestDraw()
-                vm.renderer?.setDeepZoom(true)
-                vm.renderer?.setHighQualityIdle(highQualityIdleRender)
-                vm.renderer?.setInteractive(false, baseIterations: vm.maxIterations)
-                // Apply restored contrast to renderer after loading state
-                vm.renderer?.setContrast(Float(contrast))
+                .padding(20)
+                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(.white.opacity(0.15)))
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+            }
+        }
+        .background(Color.black.ignoresSafeArea())
+        .onAppear {
+            if let s = vm.loadState() {
+                // Deep Zoom is always on now; ignore saved flag
+                palette = s.palette
+                contrast = s.contrast
+            }
+            vm.pushViewport(currentPointsSize(geo.size), screenScale: currentScreenScale())
+            vm.requestDraw()
+            vm.renderer?.setDeepZoom(true)
+            vm.renderer?.setHighQualityIdle(highQualityIdleRender)
+            vm.renderer?.setInteractive(false, baseIterations: vm.maxIterations)
+            // Apply restored contrast to renderer after loading state
+            vm.renderer?.setContrast(Float(contrast))
 
-                // Restore palette by saved name if available; otherwise fall back to index
-                if let savedName = UserDefaults.standard.string(forKey: kPaletteNameKey),
-                   let opt = paletteOptions.first(where: { $0.name == savedName }) {
-                    applyPaletteOption(opt) // rebuild LUT or select GPU built‑in
-                } else {
-                    vm.renderer?.setPalette(palette)
-                    currentPaletteName = (palette == 0 ? "HSV" : palette == 1 ? "Fire" : palette == 2 ? "Ocean" : currentPaletteName)
-                    vm.requestDraw()
-                }
-                if UserDefaults.standard.object(forKey: kHQIdleKey) != nil {
-                    highQualityIdleRender = UserDefaults.standard.bool(forKey: kHQIdleKey)
-                }
-                loadBookmarks()
-                // Listen for renderer fallbacks (perturbation/LUT resource issues)
-                fallbackObserver = NotificationCenter.default.addObserver(forName: .MandelbrotRendererFallback, object: nil, queue: .main) { note in
-                    if let msg = note.userInfo?["reason"] as? String {
-                        fallbackBanner = msg
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) {
-                            if fallbackBanner == msg { fallbackBanner = nil }
-                        }
+            // Restore palette by saved name if available; otherwise fall back to index
+            if let savedName = UserDefaults.standard.string(forKey: kPaletteNameKey),
+               let opt = paletteOptions.first(where: { $0.name == savedName }) {
+                applyPaletteOption(opt) // rebuild LUT or select GPU built‑in
+            } else {
+                vm.renderer?.setPalette(palette)
+                currentPaletteName = (palette == 0 ? "HSV" : palette == 1 ? "Fire" : palette == 2 ? "Ocean" : currentPaletteName)
+                vm.requestDraw()
+            }
+            if UserDefaults.standard.object(forKey: kHQIdleKey) != nil {
+                highQualityIdleRender = UserDefaults.standard.bool(forKey: kHQIdleKey)
+            }
+            loadBookmarks()
+            // Listen for renderer fallbacks (perturbation/LUT resource issues)
+            fallbackObserver = NotificationCenter.default.addObserver(forName: .MandelbrotRendererFallback, object: nil, queue: .main) { note in
+                if let msg = note.userInfo?["reason"] as? String {
+                    fallbackBanner = msg
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) {
+                        if fallbackBanner == msg { fallbackBanner = nil }
                     }
                 }
             }
-            .onChange(of: contrast) { _, newVal in
-                vm.renderer?.setContrast(Float(newVal))
-                vm.saveState(perturb: false, deep: true, palette: palette, contrast: newVal)
+        }
+        .onChange(of: contrast) { _, newVal in
+            vm.renderer?.setContrast(Float(newVal))
+            vm.saveState(palette: palette, contrast: newVal)
+        }
+        .onDisappear {
+            if let obs = fallbackObserver {
+                NotificationCenter.default.removeObserver(obs)
+                fallbackObserver = nil
             }
-            .onDisappear {
-                if let obs = fallbackObserver {
-                    NotificationCenter.default.removeObserver(obs)
-                    fallbackObserver = nil
+        }
+        .onChange(of: geo.size) { _, newSize in
+            // Geometry changed (rotation/split view/resize). Recompute drawable size
+            // from the new points size so the aspect ratio stays correct.
+            DispatchQueue.main.async {
+                if let v = vm.mtkView {
+                    let scale = v.window?.screen.scale ?? UIScreen.main.scale
+                    v.drawableSize = CGSize(width: newSize.width * scale,
+                                            height: newSize.height * scale)
                 }
+                vm.pushViewport(currentPointsSize(newSize), screenScale: currentScreenScale())
+                vm.requestDraw()
             }
-            .onChange(of: geo.size) { _, newSize in
-                // Geometry changed (rotation/split view/resize). Recompute drawable size
-                // from the new points size so the aspect ratio stays correct.
-                DispatchQueue.main.async {
-                    if let v = vm.mtkView {
-                        let scale = v.window?.screen.scale ?? UIScreen.main.scale
-                        v.drawableSize = CGSize(width: newSize.width * scale,
-                                                height: newSize.height * scale)
-                    }
-                    vm.pushViewport(currentPointsSize(newSize), screenScale: currentScreenScale())
-                    vm.requestDraw()
-                }
-            }
-            .onChange(of: palette) { _, _ in
+        }
+        .onChange(of: palette) { _, _ in
+            persistPaletteSelection()
+        }
+        .onChange(of: highQualityIdleRender) { _, newValue in
+            UserDefaults.standard.set(newValue, forKey: kHQIdleKey)
+            vm.renderer?.setHighQualityIdle(newValue)
+            // Re-evaluate interactive mode based on the switch
+            let interactiveNow = newValue ? isInteracting : true
+            vm.renderer?.setInteractive(interactiveNow, baseIterations: vm.maxIterations)
+            vm.requestDraw()
+        }
+        .onChange(of: useDisplayP3) { _, _ in refreshCurrentLUT() }
+        .onChange(of: lutWidth) { _, _ in refreshCurrentLUT() }
+        .onChange(of: isInteracting) { _, active in
+            let interactiveNow = highQualityIdleRender ? active : true
+            vm.renderer?.setInteractive(interactiveNow, baseIterations: vm.maxIterations)
+            vm.requestDraw()
+        }
+        .onChange(of: currentPaletteName) { _, _ in persistPaletteSelection() }
+        .onChange(of: vm.center) { _, _ in
+            vm.saveState(palette: palette, contrast: contrast)
+        }
+        .onChange(of: vm.scalePixelsPerUnit) { _, _ in
+            vm.saveState(palette: palette, contrast: contrast)
+        }
+        .onChange(of: vm.maxIterations) { _, _ in
+            vm.saveState(palette: palette, contrast: contrast)
+        }
+        .onChange(of: scenePhase) { _, newPhase in
+            if newPhase == .background {
                 persistPaletteSelection()
             }
-            .onChange(of: highQualityIdleRender) { _, newValue in
-                UserDefaults.standard.set(newValue, forKey: kHQIdleKey)
-                vm.renderer?.setHighQualityIdle(newValue)
-                // Re-evaluate interactive mode based on the switch
-                let interactiveNow = newValue ? isInteracting : true
-                vm.renderer?.setInteractive(interactiveNow, baseIterations: vm.maxIterations)
-                vm.requestDraw()
-            }
-            .onChange(of: useDisplayP3) { _, _ in refreshCurrentLUT() }
-            .onChange(of: lutWidth) { _, _ in refreshCurrentLUT() }
-            .onChange(of: isInteracting) { _, active in
-                let interactiveNow = highQualityIdleRender ? active : true
-                vm.renderer?.setInteractive(interactiveNow, baseIterations: vm.maxIterations)
-                vm.requestDraw()
-            }
-            .onChange(of: currentPaletteName) { _, _ in persistPaletteSelection() }
-            .onChange(of: vm.center) { _, _ in
-                vm.saveState(perturb: false, deep: true, palette: palette, contrast: contrast)
-            }
-            .onChange(of: vm.scalePixelsPerUnit) { _, _ in
-                vm.saveState(perturb: false, deep: true, palette: palette, contrast: contrast)
-            }
-            .onChange(of: vm.maxIterations) { _, _ in
-                vm.saveState(perturb: false, deep: true, palette: palette, contrast: contrast)
-            }
-            .onChange(of: scenePhase) { _, newPhase in
-                if newPhase == .background {
-                    persistPaletteSelection()
+        }
+        .sheet(isPresented: $showPalettePicker) {
+            NavigationStack {
+                PalettePickerView(selected: currentPaletteName, options: paletteOptions) { opt in
+                    applyPaletteOption(opt)
+                    showPalettePicker = false
                 }
+                .navigationTitle("Palettes")
+                .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Close") { showPalettePicker = false } } }
             }
-            .sheet(isPresented: $showPalettePicker) {
-                NavigationStack {
-                    PalettePickerView(selected: currentPaletteName, options: paletteOptions) { opt in
-                        applyPaletteOption(opt)
-                        showPalettePicker = false
-                    }
-                    .navigationTitle("Palettes")
-                    .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Close") { showPalettePicker = false } } }
-                }
-            }
-            .sheet(isPresented: $showShare) {
-                ShareSheet(items: shareItems)
-            }
-            .sheet(isPresented: $showCaptureSheet) {
-                CaptureSheet(
-                    snapRes: $snapRes,
-                    customW: $customW,
-                    customH: $customH,
-                    onConfirm: { saveCurrentSnapshot() },
-                    onClose: { showCaptureSheet = false },
-                    onCustomTap: { showCustomRes = true }
-                )
-            }
-            .sheet(isPresented: $showCustomRes) {
-                NavigationStack {
-                    Form {
-                        Section(header: Text("Custom Resolution")) {
+        }
+        .sheet(isPresented: $showShare) {
+            ShareSheet(items: shareItems)
+        }
+        .sheet(isPresented: $showCaptureSheet) {
+            NavigationStack {
+                Form {
+                    Section("Resolution") {
+                        Picker("Size", selection: $snapRes) {
+                            ForEach(SnapshotRes.allCases) { r in
+                                Text(r.rawValue).tag(r)
+                            }
+                        }
+                        if snapRes == .custom {
                             TextField("Width", text: $customW).keyboardType(.numberPad)
                             TextField("Height", text: $customH).keyboardType(.numberPad)
                         }
                     }
-                    .navigationTitle("Custom Size")
+                    Section {
+                        Button("Capture Now") { saveCurrentSnapshot() }
+                    }
+                }
+                .navigationTitle("Capture Image")
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) { Button("Close") { showCaptureSheet = false } }
+                }
+            }
+        }
+        .sheet(isPresented: $showCustomRes) {
+            NavigationStack {
+                Form {
+                    Section(header: Text("Custom Resolution")) {
+                        TextField("Width", text: $customW).keyboardType(.numberPad)
+                        TextField("Height", text: $customH).keyboardType(.numberPad)
+                    }
+                }
+                .navigationTitle("Custom Size")
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) { Button("Cancel") { showCustomRes = false } }
+                    ToolbarItem(placement: .confirmationAction) { Button("Done") { snapRes = .custom; showCustomRes = false } }
+                }
+            }
+        }
+        .sheet(isPresented: $showHelp) {
+            NavigationStack {
+                HelpSheetView()
+                    .navigationTitle("Help")
                     .toolbar {
-                        ToolbarItem(placement: .cancellationAction) { Button("Cancel") { showCustomRes = false } }
-                        ToolbarItem(placement: .confirmationAction) { Button("Done") { snapRes = .custom; showCustomRes = false } }
+                        ToolbarItem(placement: .cancellationAction) { Button("Close") { showHelp = false } }
                     }
-                }
             }
-            .sheet(isPresented: $showHelp) {
-                NavigationStack {
-                    HelpSheetView()
-                        .navigationTitle("Help")
-                        .toolbar {
-                            ToolbarItem(placement: .cancellationAction) { Button("Close") { showHelp = false } }
-                        }
-                }
+        }
+        .sheet(isPresented: $showAbout) {
+            VStack(spacing: 16) {
+                Text("Mandelbrot Metal").font(.title).bold()
+                Text(appCopyright())
+                Text(appVersionBuild())
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                Button("Close") { showAbout = false }.padding()
             }
-            .sheet(isPresented: $showAbout) {
-                VStack(spacing: 16) {
-                    Text("Mandelbrot Metal").font(.title).bold()
-                    Text(appCopyright())
-                    Text(appVersionBuild())
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                    Button("Close") { showAbout = false }.padding()
-                }
-                .padding()
-            }
-            .sheet(isPresented: $showAddBookmark) {
-                NavigationStack {
-                    Form { TextField("Name", text: $newBookmarkName) }
-                        .navigationTitle("Add Bookmark")
-                        .toolbar {
-                            ToolbarItem(placement: .cancellationAction) { Button("Cancel") { showAddBookmark = false } }
-                            ToolbarItem(placement: .confirmationAction) { Button("Save") {
-                                let bm = Bookmark(
-                                    name: newBookmarkName.isEmpty ? "Bookmark \(bookmarks.count+1)" : newBookmarkName,
-                                    center: vm.center,
-                                    scale: vm.scalePixelsPerUnit,
-                                    palette: palette,
-                                    paletteName: currentPaletteName,
-                                    deep: true,
-                                    perturb: false,
-                                    iterations: vm.maxIterations,
-                                    contrast: contrast
-                                )
-                                bookmarks.append(bm)
-                                saveBookmarks()
-                                showAddBookmark = false
-                            } }
-                        }
-                }
-            }
-            .sheet(isPresented: .constant(false)) { EmptyView() } // placeholder
-            .sheet(isPresented: $showOptionsSheet) {
-                optionsSheet()
-            }
-            .onReceive(Timer.publish(every: 0.25, on: .main, in: .common).autoconnect()) { _ in
-                let newFactor = currentSSAAFactor()
-                if newFactor != ssaaSamples {
-                    withAnimation(.easeInOut(duration: 0.15)) {
-                        ssaaSamples = newFactor
+            .padding()
+        }
+        .sheet(isPresented: $showAddBookmark) {
+            NavigationStack {
+                Form { TextField("Name", text: $newBookmarkName) }
+                    .navigationTitle("Add Bookmark")
+                    .toolbar {
+                        ToolbarItem(placement: .cancellationAction) { Button("Cancel") { showAddBookmark = false } }
+                        ToolbarItem(placement: .confirmationAction) { Button("Save") {
+                            let bm = Bookmark(
+                                name: newBookmarkName.isEmpty ? "Bookmark \(bookmarks.count+1)" : newBookmarkName,
+                                center: vm.center,
+                                scale: vm.scalePixelsPerUnit,
+                                palette: palette,
+                                paletteName: currentPaletteName,
+                                deep: true,
+                                perturb: false,
+                                iterations: vm.maxIterations,
+                                contrast: contrast
+                            )
+                            bookmarks.append(bm)
+                            saveBookmarks()
+                            showAddBookmark = false
+                        } }
                     }
+            }
+        }
+        .sheet(isPresented: .constant(false)) { EmptyView() } // placeholder
+        .sheet(isPresented: $showOptionsSheet) {
+            optionsSheet()
+        }
+        .onReceive(Timer.publish(every: 0.25, on: .main, in: .common).autoconnect()) { _ in
+            let newFactor = currentSSAAFactor()
+            if newFactor != ssaaSamples {
+                withAnimation(.easeInOut(duration: 0.15)) {
+                    ssaaSamples = newFactor
                 }
             }
-            .navigationTitle("Mandelbrot Metal")
-            .navigationBarTitleDisplayMode(.inline)
+        }
+        .navigationTitle("Mandelbrot Metal")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            // Compact (iPhone / small iPad portrait): lightweight top toolbar
+            if hSize == .compact {
+                ToolbarItemGroup(placement: .topBarLeading) {
+                    // Quick Reset
+                    Button {
+                        reset(UIScreen.main.bounds.size)
+                    } label: {
+                        Image(systemName: "arrow.counterclockwise")
+                    }
+                    .accessibilityLabel("Reset")
+                    .disabled(isCapturing)
+                }
+                ToolbarItemGroup(placement: .topBarTrailing) {
+                    // Capture (icon-only)
+                    Button {
+                        openCaptureSheet()
+                    } label: {
+                        Image(systemName: "camera")
+                            .imageScale(.large)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 8)
+                    }
+                    .accessibilityLabel("Capture Image")
+                    .disabled(isCapturing)
+
+                    // Palette picker (icon-only)
+                    Button {
+                        showPalettePicker = true
+                    } label: {
+                        Image(systemName: "paintpalette")
+                    }
+                    .accessibilityLabel("Palette Picker")
+
+                    // Options (icon-only)
+                    Button {
+                        showOptionsSheet = true
+                    } label: {
+                        Image(systemName: "slider.horizontal.3")
+                    }
+                    .accessibilityLabel("Options")
+
+                    // Info menu
+                    Menu {
+                        Button { showAbout = true } label: { Label("About", systemImage: "info.circle") }
+                        Button { showHelp = true }  label: { Label("Help",  systemImage: "questionmark.circle") }
+                    } label: {
+                        Image(systemName: "ellipsis.circle")
+                    }
+                    .accessibilityLabel("Info")
+                }
+            }
+            // Regular (iPad / large): keep top bar clean (floatingControls covers primary actions)
+            else {
+                ToolbarItem(placement: .topBarTrailing) {
+                    // About/Help menu only
+                    Menu {
+                        Button { showAbout = true } label: { Label("About", systemImage: "info.circle") }
+                        Button { showHelp = true }  label: { Label("Help",  systemImage: "questionmark.circle") }
+                    } label: {
+                        Image(systemName: "ellipsis.circle")
+                    }
+                    .accessibilityLabel("Info")
+                }
+            }
         }
     }
-}
 
-@ViewBuilder
-private func optionsSheet() -> some View {
-    CompactOptionsSheet(
-        currentPaletteName: $currentPaletteName,
-        showPalettePicker: $showPalettePicker,
-        autoIterations: $autoIterations,
-        iterations: $vm.maxIterations,
-        highQualityIdle: $highQualityIdleRender,
-        useDisplayP3: $useDisplayP3,
-        lutWidth: $lutWidth,
-        snapRes: $snapRes,
-        paletteOptions: paletteOptions,
-        applyPalette: { opt in
-            applyPaletteOption(opt)
-        },
-        onImportGradient: { item in
-            gradientItem = item
-            importGradientItem(item)
-        },
-        onSave: { showCaptureSheet = true },
-        onAbout: { showAbout = true },
-        onHelp: { showHelp = true },
-        onClose: { showOptionsSheet = false },
-        onCustom: { showCustomRes = true }
-    )
-    .presentationDetents([.medium, .large])
-    .presentationDragIndicator(.visible)
-}
+    var body: some View {
+        NavigationStack {
+            GeometryReader { geo in
+                mainContent(geo)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func optionsSheet() -> some View {
+        NavigationStack {
+            Form {
+                Section("Color") {
+                    Button {
+                        showPalettePicker = true
+                    } label: {
+                        HStack {
+                            palettePreview(for: currentPaletteName)
+                                .frame(width: 72, height: 18)
+                                .clipShape(Capsule())
+                                .overlay(Capsule().strokeBorder(.white.opacity(0.2)))
+                            Text(currentPaletteName)
+                            Spacer()
+                            Image(systemName: "chevron.right")
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    Toggle("Wide Color (P3)", isOn: $useDisplayP3)
+                    Picker("LUT Resolution", selection: Binding(
+                        get: { lutWidth },
+                        set: { lutWidth = $0 }
+                    )) {
+                        Text("256 px").tag(256)
+                        Text("1024 px").tag(1024)
+                    }
+                }
+
+                Section("Quality") {
+                    Toggle("High‑Quality Idle", isOn: $highQualityIdleRender)
+                    Toggle("Auto Iterations", isOn: $autoIterations)
+                    HStack {
+                        Text("Iterations")
+                        Slider(value: iterBinding, in: 100...5000, step: 50.0)
+                    }
+                }
+
+                Section("Capture") {
+                    Picker("Resolution", selection: $snapRes) {
+                        ForEach(SnapshotRes.allCases) { r in
+                            Text(r.rawValue).tag(r)
+                        }
+                    }
+                    if snapRes == .custom {
+                        HStack {
+                            TextField("Width", text: $customW).keyboardType(.numberPad)
+                            TextField("Height", text: $customH).keyboardType(.numberPad)
+                        }
+                    }
+                    Button("Capture Now") { saveCurrentSnapshot() }
+                        .disabled(isCapturing)
+                }
+
+                Section("Info") {
+                    Button("Help")   { showHelp = true }
+                    Button("About")  { showAbout = true }
+                }
+            }
+            .navigationTitle("Options")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Close") { showOptionsSheet = false }
+                }
+            }
+        }
+        .presentationDetents([.medium, .large])
+        .presentationDragIndicator(.visible)
+    }
     
     private func persistPaletteSelection() {
+        // Persist the friendly palette name for HUD/restore
         UserDefaults.standard.set(currentPaletteName, forKey: kPaletteNameKey)
-        vm.saveState(perturb: false, deep: true, palette: palette, contrast: contrast)
+        // Persist core render state alongside the palette
+        vm.saveState(palette: palette, contrast: contrast)
     }
 
     private func currentScreenScale() -> CGFloat {
@@ -545,8 +679,13 @@ private func optionsSheet() -> some View {
 
     @ViewBuilder
     private func floatingControls(_ geo: GeometryProxy) -> some View {
-        let compact = (hSize == .compact)
-        if compact {
+        // Use device idiom so iPad always gets the richer two‑row bar,
+        // even in compact size classes (e.g., portrait or Split View).
+        let isPad = UIDevice.current.userInterfaceIdiom == .pad
+        let useCompact = !isPad
+
+        if useCompact {
+            // iPhone (compact): one slim row of primary actions
             HStack(spacing: 14) {
                 Button(action: { reset(geo.size) }) {
                     Image(systemName: "arrow.counterclockwise")
@@ -555,13 +694,12 @@ private func optionsSheet() -> some View {
                 }
                 .accessibilityLabel("Reset")
                 .disabled(isCapturing)
+
                 Spacer(minLength: 8)
+
                 Button(action: { openCaptureSheet() }) {
-                    Label("Capture", systemImage: "camera")
-                        .labelStyle(.titleAndIcon)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.9)
-                        .frame(minWidth: 120, alignment: .center)
+                    Image(systemName: "camera")
+                        .imageScale(.large)
                         .padding(.horizontal, 10)
                         .padding(.vertical, 8)
                 }
@@ -569,6 +707,7 @@ private func optionsSheet() -> some View {
                 .tint(.accentColor)
                 .foregroundStyle(.white)
                 .disabled(isCapturing)
+
                 Menu {
                     Toggle("Wide Color (P3)", isOn: $useDisplayP3)
                     Toggle("High‑res LUT (1024px)", isOn: Binding(
@@ -576,15 +715,14 @@ private func optionsSheet() -> some View {
                         set: { lutWidth = $0 ? 1024 : 256 }
                     ))
                 } label: {
-                    Label("Color", systemImage: "paintpalette")
-                        .labelStyle(.iconOnly)
+                    Image(systemName: "paintpalette")
                         .imageScale(.large)
                         .padding(8)
                 }
                 .accessibilityLabel("Color options")
+
                 Button(action: { showOptionsSheet = true }) {
-                    Label("Options", systemImage: "slider.horizontal.3")
-                        .labelStyle(.iconOnly)
+                    Image(systemName: "slider.horizontal.3")
                         .imageScale(.large)
                         .padding(8)
                 }
@@ -601,154 +739,250 @@ private func optionsSheet() -> some View {
             .tint(.primary)
             .foregroundStyle(.primary)
         } else {
-            // Regular: polished two-row floating bar (grouped)
+            // iPad (regular): improved responsive two‑row control bar
+            let w = geo.size.width
+            let narrow = w < 1100         // treat 11" landscape as narrow
+            let veryNarrow = w < 850      // iPad portrait / tight split
+            let barMax = max(320.0, w - 24.0)   // keep inside screen padding
+            let capWidth = barMax               // no artificial cap; use available width
+
             VStack(spacing: 10) {
-                let narrow = geo.size.width < 980
-                // Row 1 — Navigation • Modes • Iterations
-                HStack(alignment: .center, spacing: narrow ? 12 : 18) {
-                    // Navigation
-                    Button(action: { reset(geo.size) }) {
-                        Label("Reset", systemImage: "arrow.counterclockwise")
-                    }
-                    .disabled(isCapturing)
-
-                    Divider().frame(height: 22).opacity(0.2)
-
-                    // Modes (Auto Iter only; Deep Zoom always on)
-                    HStack(spacing: 16) {
-                        LabeledToggle(title: "Auto Iter", systemImage: "aqi.medium", isOn: $autoIterations)
-                        LabeledToggle(title: "HQ idle", systemImage: "sparkles", isOn: $highQualityIdleRender)
-                    }
-
-                    Divider().frame(height: 22).opacity(0.2)
-
-                    // Iterations (slider + live value)
-                    HStack(spacing: 10) {
-                        Text("Iterations")
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.9)
-
-                        Button(action: {
-                            let newVal = max(100, vm.maxIterations - 50)
-                            vm.maxIterations = newVal
-                            vm.renderer?.setMaxIterations(newVal)
-                            vm.requestDraw()
-                        }) { Image(systemName: "minus") }
-                        .buttonStyle(.borderless)
+                // ROW 1 — Nav • Modes • Iterations (responsive)
+                ViewThatFits {
+                    // Full row
+                    HStack(alignment: .center, spacing: narrow ? 8 : 14) {
+                        Button(action: { reset(geo.size) }) {
+                            Label("Reset", systemImage: "arrow.counterclockwise")
+                        }
+                        .labelStyle(.titleAndIcon)
                         .controlSize(.small)
+                        .disabled(isCapturing)
 
+                        Divider().frame(height: 22).opacity(0.18)
+
+                        HStack(spacing: 10) {
+                            LabeledToggle(title: veryNarrow ? "Auto" : "Auto Iter",
+                                          systemImage: "aqi.medium",
+                                          isOn: $autoIterations)
+                            LabeledToggle(title: veryNarrow ? "HQ" : "HQ idle",
+                                          systemImage: "sparkles",
+                                          isOn: $highQualityIdleRender)
+                        }
+
+                        Divider().frame(height: 22).opacity(0.18)
+
+                        HStack(spacing: 6) {
+                            Text("Iterations").lineLimit(1).minimumScaleFactor(0.85)
+                            Button { let v = max(100, vm.maxIterations - 50); vm.maxIterations = v; vm.renderer?.setMaxIterations(v); vm.requestDraw() } label: { Image(systemName: "minus") }
+                                .buttonStyle(.borderless).controlSize(.small)
+                            Slider(value: iterBinding, in: 100...5000, step: 50)
+                                .controlSize(.small)
+                                .frame(width: min(max(w * 0.30, 200), veryNarrow ? 260 : 380))
+                                .layoutPriority(2)
+                            Button { let v = min(5000, vm.maxIterations + 50); vm.maxIterations = v; vm.renderer?.setMaxIterations(v); vm.requestDraw() } label: { Image(systemName: "plus") }
+                                .buttonStyle(.borderless).controlSize(.small)
+                            Text(autoIterations ? "\(effectiveIterations) (auto)" : "\(vm.maxIterations)")
+                                .font(.caption).foregroundStyle(.secondary)
+                                .monospacedDigit().lineLimit(1).minimumScaleFactor(0.8)
+                        }
+                        .layoutPriority(2)
+
+                        Spacer(minLength: 6)
+                    }
+
+                    // Compact fallback (short labels, smaller slider)
+                    HStack(alignment: .center, spacing: 10) {
+                        Button(action: { reset(geo.size) }) { Image(systemName: "arrow.counterclockwise") }
+                            .controlSize(.small).disabled(isCapturing)
+                        LabeledToggle(title: "Auto", systemImage: "aqi.medium", isOn: $autoIterations)
+                        LabeledToggle(title: "HQ",   systemImage: "sparkles",   isOn: $highQualityIdleRender)
+                        Text("Iter").font(.caption)
+                        Button { let v = max(100, vm.maxIterations - 50); vm.maxIterations = v; vm.renderer?.setMaxIterations(v); vm.requestDraw() } label: { Image(systemName: "minus") }
+                            .buttonStyle(.borderless).controlSize(.small)
                         Slider(value: iterBinding, in: 100...5000, step: 50)
                             .controlSize(.small)
-                            .frame(width: min(max(geo.size.width * 0.18, 160), 260))
+                            .frame(width: min(max(w * 0.24, 160), 240))
+                        Button { let v = min(5000, vm.maxIterations + 50); vm.maxIterations = v; vm.renderer?.setMaxIterations(v); vm.requestDraw() } label: { Image(systemName: "plus") }
+                            .buttonStyle(.borderless).controlSize(.small)
+                    }
+                }
 
-                        Button(action: {
-                            let newVal = min(5000, vm.maxIterations + 50)
-                            vm.maxIterations = newVal
-                            vm.renderer?.setMaxIterations(newVal)
-                            vm.requestDraw()
-                        }) { Image(systemName: "plus") }
-                        .buttonStyle(.borderless)
+                // ROW 2 — Color • Contrast • Bookmarks • Capture • Info
+                ViewThatFits {
+                    // Wide/normal iPad: single row
+                    HStack(alignment: .center, spacing: narrow ? 8 : 14) {
+                        Button(action: { showPalettePicker = true }) {
+                            HStack(spacing: 8) {
+                                palettePreview(for: currentPaletteName)
+                                    .frame(width: veryNarrow ? 42 : (narrow ? 52 : 64), height: 14)
+                                    .clipShape(Capsule())
+                                    .overlay(Capsule().strokeBorder(.white.opacity(0.2)))
+                                Text("Palette").lineLimit(1).minimumScaleFactor(0.9)
+                            }
+                        }
+
+                        Menu {
+                            Toggle("Wide Color (P3)", isOn: $useDisplayP3)
+                            Toggle("High‑res LUT (1024px)", isOn: Binding(
+                                get: { lutWidth == 1024 },
+                                set: { lutWidth = $0 ? 1024 : 256 }
+                            ))
+                        } label: {
+                            if veryNarrow {
+                                Image(systemName: "paintpalette")
+                            } else {
+                                Label("Color", systemImage: "paintpalette")
+                                    .lineLimit(1)
+                                    .minimumScaleFactor(0.9)
+                            }
+                        }
+
+                        // Compact contrast: icon + slider + value
+                        HStack(spacing: 6) {
+                            Image(systemName: "circle.lefthalf.filled")
+                                .accessibilityLabel("Contrast")
+                            Slider(value: $contrast, in: 0.5...1.5, step: 0.01)
+                                .frame(width: veryNarrow ? 140 : 200)
+                                .layoutPriority(2)
+                            Text(String(format: "%.2f", contrast))
+                                .font(.caption).foregroundStyle(.secondary)
+                                .frame(width: 34, alignment: .trailing)
+                        }
                         .controlSize(.small)
 
-                        Text(autoIterations ? "\(effectiveIterations) (auto)" : "\(vm.maxIterations)")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .monospacedDigit()
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.8)
-                    }
-                    .frame(height: 28)
-
-                    Spacer(minLength: 8)
-                }
-
-                // Row 2 — Color • Bookmarks • Export • Info
-                HStack(alignment: .center, spacing: narrow ? 12 : 18) {
-                    // Color
-                    Button(action: { showPalettePicker = true }) {
-                        HStack(spacing: 8) {
-                            palettePreview(for: currentPaletteName)
-                                .frame(width: 72, height: 18)
-                                .clipShape(Capsule())
-                                .overlay(Capsule().strokeBorder(.white.opacity(0.2)))
-                            Text("Palette")
-                                .lineLimit(1)
-                                .minimumScaleFactor(0.85)
+                        PhotosPicker(selection: $gradientItem, matching: .images) {
+                            Label(veryNarrow ? "Import" : "Import Gradient", systemImage: "photo.on.rectangle")
+                                .lineLimit(1).minimumScaleFactor(0.9)
                         }
-                    }
-                    Menu {
-                        Toggle("Wide Color (P3)", isOn: $useDisplayP3)
-                        Toggle("High‑res LUT (1024px)", isOn: Binding(
-                            get: { lutWidth == 1024 },
-                            set: { lutWidth = $0 ? 1024 : 256 }
-                        ))
-                    } label: {
-                        Label("Color", systemImage: "paintpalette")
-                    }
-                    HStack {
-                        Text("Contrast")
-                        Slider(value: $contrast, in: 0.5...1.5, step: 0.01)
-                            .frame(width: 160) // keep it narrow so it won’t wrap
-                        Text(String(format: "%.2f", contrast))
-                            .font(.caption).foregroundStyle(.secondary)
-                    }
+                        .onChange(of: gradientItem) { _, item in importGradientItem(item) }
 
-                    PhotosPicker(selection: $gradientItem, matching: .images) {
-                        Label(narrow ? "Import" : "Import Gradient", systemImage: "photo.on.rectangle")
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.85)
-                    }
-                    .onChange(of: gradientItem) { _, item in importGradientItem(item) }
-
-                    // Bookmarks
-                    Menu("Bookmarks") {
-                        Button("Add Current…") { newBookmarkName = ""; showAddBookmark = true }
-                        if !bookmarks.isEmpty {
-                            Divider()
-                            ForEach(bookmarks) { bm in
-                                Button(bm.name) { applyBookmark(bm, size: geo.size) }
+                        Menu("Bookmarks") {
+                            Button("Add Current…") { newBookmarkName = ""; showAddBookmark = true }
+                            if !bookmarks.isEmpty {
+                                Divider()
+                                ForEach(bookmarks) { bm in
+                                    Button(bm.name) { applyBookmark(bm, size: geo.size) }
+                                }
+                                Divider()
+                                Button("Clear All", role: .destructive) { bookmarks.removeAll(); saveBookmarks() }
                             }
-                            Divider()
-                            Button("Clear All", role: .destructive) { bookmarks.removeAll(); saveBookmarks() }
+                        }
+
+                        Spacer(minLength: 6)
+
+                        Button(action: { openCaptureSheet() }) {
+                            Label(narrow ? "Capture" : "Capture Image", systemImage: "camera")
+                                .lineLimit(1).minimumScaleFactor(0.9)
+                                .frame(minWidth: veryNarrow ? 120 : (narrow ? 140 : 160))
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .tint(.accentColor)
+                        .foregroundStyle(.white)
+                        .disabled(isCapturing)
+
+                        Menu {
+                            Button(action: { showAbout = true }) { Label("About", systemImage: "info.circle") }
+                            Button(action: { showHelp = true })  { Label("Help",  systemImage: "questionmark.circle") }
+                        } label: {
+                            Label("Info", systemImage: "info.circle")
+                        }
+                        .accessibilityLabel("Info")
+                    }
+
+                    // Fallback for very narrow iPad portrait / split: two compact rows
+                    VStack(spacing: 8) {
+                        HStack(spacing: 10) {
+                            Button(action: { showPalettePicker = true }) {
+                                HStack(spacing: 8) {
+                                    palettePreview(for: currentPaletteName)
+                                        .frame(width: veryNarrow ? 42 : (narrow ? 52 : 64), height: 14)
+                                        .clipShape(Capsule())
+                                        .overlay(Capsule().strokeBorder(.white.opacity(0.2)))
+                                    Text("Palette").lineLimit(1).minimumScaleFactor(0.9)
+                                }
+                            }
+                            Menu {
+                                Toggle("Wide Color (P3)", isOn: $useDisplayP3)
+                                Toggle("High‑res LUT (1024px)", isOn: Binding(
+                                    get: { lutWidth == 1024 },
+                                    set: { lutWidth = $0 ? 1024 : 256 }
+                                ))
+                            } label: {
+                                if veryNarrow {
+                                    Image(systemName: "paintpalette")
+                                } else {
+                                    Label("Color", systemImage: "paintpalette")
+                                        .lineLimit(1)
+                                        .minimumScaleFactor(0.9)
+                                }
+                            }
+                            Spacer(minLength: 6)
+                            // Contrast gets full available width in compact fallback
+                            HStack(spacing: 6) {
+                                Image(systemName: "circle.lefthalf.filled")
+                                    .accessibilityLabel("Contrast")
+                                Slider(value: $contrast, in: 0.5...1.5, step: 0.01)
+                                Text(String(format: "%.2f", contrast))
+                                    .font(.caption).foregroundStyle(.secondary)
+                                    .frame(width: 34, alignment: .trailing)
+                            }
+                            .controlSize(.small)
+                            .layoutPriority(2)
+                        }
+                        HStack(spacing: 10) {
+                            PhotosPicker(selection: $gradientItem, matching: .images) {
+                                Label(veryNarrow ? "Import" : "Import Gradient", systemImage: "photo.on.rectangle")
+                                    .lineLimit(1).minimumScaleFactor(0.9)
+                            }
+                            .onChange(of: gradientItem) { _, item in importGradientItem(item) }
+
+                            Menu("Bookmarks") {
+                                Button("Add Current…") { newBookmarkName = ""; showAddBookmark = true }
+                                if !bookmarks.isEmpty {
+                                    Divider()
+                                    ForEach(bookmarks) { bm in
+                                        Button(bm.name) { applyBookmark(bm, size: geo.size) }
+                                    }
+                                    Divider()
+                                    Button("Clear All", role: .destructive) { bookmarks.removeAll(); saveBookmarks() }
+                                }
+                            }
+                            Spacer(minLength: 6)
+                            Button(action: { openCaptureSheet() }) {
+                                Label("Capture", systemImage: "camera")
+                                    .lineLimit(1).minimumScaleFactor(0.9)
+                                    .frame(minWidth: 120)
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .tint(.accentColor)
+                            .foregroundStyle(.white)
+                            .disabled(isCapturing)
+                            Menu {
+                                Button(action: { showAbout = true }) { Label("About", systemImage: "info.circle") }
+                                Button(action: { showHelp = true })  { Label("Help",  systemImage: "questionmark.circle") }
+                            } label: {
+                                if veryNarrow {
+                                    Image(systemName: "info.circle")
+                                } else {
+                                    Label("Info", systemImage: "info.circle")
+                                }
+                            }
                         }
                     }
-
-                    Spacer(minLength: 8) // push Export group + Info to the right
-
-                    // --- Capture (opens a dialog with resolution) ---
-                    Button(action: { openCaptureSheet() }) {
-                        Label(narrow ? "Capture" : "Capture Image", systemImage: "camera")
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.9)
-                            .frame(minWidth: narrow ? 140 : 160, alignment: .center)
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .tint(.accentColor)
-                    .foregroundStyle(.white)
-                    .controlSize(.regular)
-                    .disabled(isCapturing)
-
-                    // Info
-                    Menu {
-                        Button(action: { showAbout = true }) { Label("About", systemImage: "info.circle") }
-                        Button(action: { showHelp = true }) { Label("Help", systemImage: "questionmark.circle") }
-                    } label: { Label("Info", systemImage: "info.circle") }
                 }
             }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 12)
+            .frame(maxWidth: capWidth)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
             .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .strokeBorder(.white.opacity(0.15))
-            )
+            .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).strokeBorder(.white.opacity(0.15)))
+            .frame(maxWidth: geo.size.width - 12)
+            .fixedSize(horizontal: false, vertical: true)
             .shadow(radius: 10)
             .tint(.primary)
             .foregroundStyle(.primary)
             .compositingGroup()
-            .onChange(of: snapRes) { _, newValue in
-                if newValue == .custom { showCustomRes = true }
-            }
+            .onChange(of: snapRes) { _, newValue in if newValue == .custom { showCustomRes = true } }
             .disabled(isCapturing)
         }
     }
@@ -1012,6 +1246,12 @@ private func optionsSheet() -> some View {
         vm.maxIterations = 100
         isInteracting = false
         vm.baselineScale = 1   // so autoIterations recalibrates from the new start
+
+        // Reset contrast to neutral and apply to renderer
+        contrast = 1.0
+        vm.renderer?.setContrast(1.0)
+        // Persist core state after reset
+        vm.saveState(palette: palette, contrast: contrast)
 
         // Apply to renderer immediately
         vm.renderer?.setMaxIterations(vm.maxIterations)
