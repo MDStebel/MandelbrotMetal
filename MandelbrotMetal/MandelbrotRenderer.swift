@@ -28,7 +28,7 @@ struct MandelbrotUniforms {
     // Quality and color
     var subpixelSamples: Int32   // 1 or 4
     var palette: Int32           // 0=HSV, 1=Fire, 2=Ocean, 3=LUT
-    var deepMode: Int32          // 0/1
+    var deepMode: Int32          // 0=float, 1=DS, 2=DD
     var _pad0: Int32             // keep 16B alignment
     
     var contrast: Float = 1.0    // contrast shaping for normalized t (1.0 = neutral)
@@ -66,6 +66,9 @@ final class MandelbrotRenderer: NSObject, MTKViewDelegate {
     private var refinePending = false
     private var highQualityIdle = true
     
+    /// Optional manual precision override: nil = auto, 0=float, 1=DS, 2=DD
+    private var precisionOverride: Int32? = nil
+    
     private weak var mtkViewRef: MTKView?
     
     /// Exposes whether sub‑pixel SSAA is active (4 samples)
@@ -75,6 +78,7 @@ final class MandelbrotRenderer: NSObject, MTKViewDelegate {
     
     // Tunables
     private let deepZoomThreshold: Double = 1.0e4 // switch to DS mapping here
+    private let ddZoomThreshold: Double = 1.0e7   // switch to DD mapping here
     
     private var uniforms = MandelbrotUniforms(
         origin: .zero,
@@ -175,6 +179,18 @@ final class MandelbrotRenderer: NSObject, MTKViewDelegate {
             uniforms.maxIt = Int32(max(1, baseIterations))
             refinePending = highQualityIdle
         }
+        // Interactive => no SSAA; Idle => enable SSAA×2 (4 samples)
+        if on {
+            if uniforms.subpixelSamples != 1 {
+                uniforms.subpixelSamples = 1
+                NotificationCenter.default.post(name: .SSAAStateChanged, object: self, userInfo: ["active": false])
+            }
+        } else {
+            if uniforms.subpixelSamples < 4 {
+                uniforms.subpixelSamples = 4
+                NotificationCenter.default.post(name: .SSAAStateChanged, object: self, userInfo: ["active": true])
+            }
+        }
         needsRender = true
         DispatchQueue.main.async { [weak self] in self?.mtkViewRef?.setNeedsDisplay() }
     }
@@ -201,6 +217,18 @@ final class MandelbrotRenderer: NSObject, MTKViewDelegate {
     func setDeepZoom(_ on: Bool) {
         // Kept for API compatibility; behavior controlled by setViewport.
         needsRender = true
+    }
+
+    /// Set precision mode override. Pass nil for automatic (by zoom thresholds), or 0/1/2 for Float/DS/DD.
+    func setPrecisionMode(_ mode: Int?) {
+        if let m = mode {
+            let clamped = max(0, min(2, m))
+            precisionOverride = Int32(clamped)
+        } else {
+            precisionOverride = nil
+        }
+        needsRender = true
+        DispatchQueue.main.async { [weak self] in self?.mtkViewRef?.setNeedsDisplay() }
     }
     
     func setHighQualityIdle(_ on: Bool) {
@@ -245,16 +273,33 @@ final class MandelbrotRenderer: NSObject, MTKViewDelegate {
         
         let invScale = 1.0 / max(1e-12, scalePixelsPerUnit)
         
-        // Switch to DS mapping only when needed
-        uniforms.deepMode = (scalePixelsPerUnit >= deepZoomThreshold) ? 1 : 0
+        // ---- Precision selection: Float → DS → DD ----
+        if let override = precisionOverride {
+            uniforms.deepMode = override
+        } else if scalePixelsPerUnit >= ddZoomThreshold {
+            uniforms.deepMode = 2   // Double‑Double path
+        } else if scalePixelsPerUnit >= deepZoomThreshold {
+            uniforms.deepMode = 1   // Double‑Single path
+        } else {
+            uniforms.deepMode = 0   // Float path
+        }
         
-        // Enable 2×2 sub‑pixel SSAA for high zooms to reduce stair‑stepping
-        uniforms.subpixelSamples = (scalePixelsPerUnit >= 1.0e5) ? 4 : 1
-        let nowSSAA = (uniforms.subpixelSamples >= 4)
-        if nowSSAA != prevSSAA {
-            NotificationCenter.default.post(name: .SSAAStateChanged,
-                                            object: self,
-                                            userInfo: ["active": nowSSAA])
+        // Prefer SSAA in idle; during interaction only enable for very high zooms
+        let targetSSAA: Int32
+        if highQualityIdle {
+            targetSSAA = 4
+        } else {
+            // Lower threshold so SSAA engages earlier
+            targetSSAA = (scalePixelsPerUnit >= 1.0e4) ? 4 : 1
+        }
+        if uniforms.subpixelSamples != targetSSAA {
+            uniforms.subpixelSamples = targetSSAA
+            let nowSSAA = (targetSSAA >= 4)
+            if nowSSAA != prevSSAA {
+                NotificationCenter.default.post(name: .SSAAStateChanged,
+                                                object: self,
+                                                userInfo: ["active": nowSSAA])
+            }
         }
         
         // Base mapping
@@ -340,6 +385,20 @@ final class MandelbrotRenderer: NSObject, MTKViewDelegate {
             let originY = center.y - 0.5 * Double(dh) * invScale
             uniforms.origin = SIMD2<Float>(Float(originX), Float(originY))
             uniforms.step   = SIMD2<Float>(Float(invScale), Float(invScale))
+            @inline(__always)
+            func split(_ d: Double) -> (Float, Float) {
+                let hi = Float(d)
+                let lo = Float(d - Double(hi))
+                return (hi, lo)
+            }
+            let (oHx, oLx) = split(originX)
+            let (oHy, oLy) = split(originY)
+            let (sHx, sLx) = split(invScale)
+            let (sHy, sLy) = split(invScale)
+            uniforms.originHi = SIMD2<Float>(oHx, oHy)
+            uniforms.originLo = SIMD2<Float>(oLx, oLy)
+            uniforms.stepHi   = SIMD2<Float>(sHx, sHy)
+            uniforms.stepLo   = SIMD2<Float>(sLx, sLy)
         }
         
         validateBindingsAndFallback()
@@ -433,8 +492,8 @@ final class MandelbrotRenderer: NSObject, MTKViewDelegate {
         u.size = SIMD2<UInt32>(UInt32(width), UInt32(height))
         u.maxIt = Int32(max(1, max(iterations, Int(uniforms.maxIt))))
         u.pixelStep = 1
-        // Force high precision + SSAA for exports
-        u.deepMode = 1
+        // Force highest precision + SSAA for exports
+        u.deepMode = 2   // use Double-Double for captures
         u.subpixelSamples = 4
         
         let invScale = 1.0 / max(1e-12, scalePixelsPerUnit)
@@ -528,7 +587,7 @@ final class MandelbrotRenderer: NSObject, MTKViewDelegate {
         var u = self.uniforms
         u.maxIt = Int32(max(1, iterations))
         u.pixelStep = 1
-        u.deepMode = 1
+        u.deepMode = 2   // use Double-Double for tiled captures
         u.subpixelSamples = 4
         
         let invScale = 1.0 / max(1e-12, scalePixelsPerUnit)

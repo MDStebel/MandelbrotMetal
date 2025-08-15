@@ -46,6 +46,8 @@ inline float  lerpf(float a, float b, float t) { return a + (b - a) * t; }
 inline float3 lerp3(float3 a, float3 b, float t) { return a + (b - a) * t; }
 inline float  saturate(float x) { return clamp(x, 0.0f, 1.0f); }
 
+
+
 // =============================================================
 // Simple palettes + optional LUT
 // =============================================================
@@ -128,6 +130,55 @@ inline ds2 ds_mul_f(ds2 a, float f) {
     return { s, (p - s) + e };
 }
 inline float ds_to_float(ds2 a) { return a.hi + a.lo; }
+
+// =============================================================
+// Double-single renormalization helper (inserted as requested)
+// =============================================================
+inline ds2 ds_renorm(ds2 a) {
+    float s = a.hi + a.lo;
+    float e = a.lo - (s - a.hi);
+    return ds_make(s, e);
+}
+
+// =============================================================
+// Double-Double (dd2) built from two ds2 terms (hi + lo)
+// =============================================================
+struct dd2 { ds2 hi; ds2 lo; };
+inline dd2 dd_from_ds(ds2 a)            { return { a, ds_from_float(0.0f) }; }
+inline dd2 dd_from_float(float x)       { return dd_from_ds(ds_from_float(x)); }
+inline ds2 dd_to_ds(dd2 a)              { return ds_add(a.hi, a.lo); }
+
+inline dd2 dd_normalize(ds2 hi, ds2 lo)
+{
+    // Fold low residual into hi while keeping a second lane
+    ds2 s = ds_add(hi, lo);              // s.hi + s.lo = exact(hi+lo) in DS form
+    ds2 hiN = ds_make(s.hi, 0.0f);       // dominant part
+    ds2 loN = ds_make(s.lo, 0.0f);       // residual kept as second lane
+    return { hiN, loN };
+}
+
+inline dd2 dd_add(dd2 a, dd2 b) {
+    // (a.hi+a.lo) + (b.hi+b.lo)
+    ds2 hiSum = ds_add(a.hi, b.hi);
+    ds2 loSum = ds_add(a.lo, b.lo);
+    return dd_normalize(hiSum, loSum);
+}
+inline dd2 dd_sub(dd2 a, dd2 b) {
+    dd2 nb = { { -b.hi.hi, -b.hi.lo }, { -b.lo.hi, -b.lo.lo } };
+    return dd_add(a, nb);
+}
+inline dd2 dd_mul(dd2 a, dd2 b) {
+    // (a.hi+a.lo)*(b.hi+b.lo) ≈ a.hi*b.hi  +  (a.hi*b.lo + a.lo*b.hi)  +  a.lo*b.lo
+    ds2 p0 = ds_mul(a.hi, b.hi);
+    ds2 p1 = ds_add(ds_mul(a.hi, b.lo), ds_mul(a.lo, b.hi));
+    ds2 p2 = ds_mul(a.lo, b.lo);
+    return dd_normalize(p0, ds_add(p1, p2));
+}
+inline dd2 dd_mul_f(dd2 a, float f) {
+    ds2 hi = ds_mul_f(a.hi, f);
+    ds2 lo = ds_mul_f(a.lo, f);
+    return dd_normalize(hi, lo);
+}
 
 // =============================================================
 // Mapping + interior tests
@@ -218,6 +269,30 @@ inline int iterateMandelDS(ds2 cx, ds2 cy, int maxIt, thread float &zxOut, threa
 }
 
 // =============================================================
+// Double-Double iteration (new)
+// =============================================================
+inline int iterateMandelDD(ds2 cx, ds2 cy, int maxIt, thread float &zxOut, thread float &zyOut) {
+    dd2 zx = dd_from_float(0.0f), zy = dd_from_float(0.0f);
+    int i = 0;
+    for (; i < maxIt; ++i) {
+        dd2 zx2 = dd_mul(zx, zx);
+        dd2 zy2 = dd_mul(zy, zy);
+        dd2 xx  = dd_sub(zx2, zy2);
+        dd2 prod = dd_mul(zx, zy);
+        dd2 yy  = dd_mul_f(prod, 2.0f);
+        zx = dd_add(xx, dd_from_ds(cx));
+        zy = dd_add(yy, dd_from_ds(cy));
+
+        // Cheap escape using dominant hi component
+        float r2h = zx.hi.hi*zx.hi.hi + zy.hi.hi*zy.hi.hi;
+        if (r2h > 4.0f) break;
+    }
+    zxOut = ds_to_float(dd_to_ds(zx));
+    zyOut = ds_to_float(dd_to_ds(zy));
+    return i;
+}
+
+// =============================================================
 // Kernel
 // =============================================================
 kernel void mandelbrotKernel(
@@ -244,6 +319,7 @@ kernel void mandelbrotKernel(
 
     for (int s = 0; s < spp; ++s) {
         if (u.deepMode != 0) {
+            // Map in DS; DD path consumes DS inputs via dd_from_ds.
             ds2 cx, cy; mapComplexDS(gid, u, cx, cy);
             if (spp > 1) {
                 ds2 sx = { u.stepHi.x, u.stepLo.x };
@@ -252,22 +328,29 @@ kernel void mandelbrotKernel(
                 cx = ds_add(cx, ds_mul_f(sx, off.x));
                 cy = ds_add(cy, ds_mul_f(sy, off.y));
             }
+
+            // Deep modes do NOT use float interior tests (too lossy at high zooms).
             float zx, zy;
-            float2 cf = float2(ds_to_float(cx), ds_to_float(cy));
-            if (!inInteriorF(cf)) {
-                int it = iterateMandelDS(cx, cy, max(1, u.maxIt), zx, zy);
-                if (it < u.maxIt) {
-                    float r2 = max(zx*zx + zy*zy, 1.0f + 1e-12f);
-                    float log_zn = 0.5f * log(r2);
-                    float nu = log(log_zn / log(2.0f)) / log(2.0f);
-                    float mu = (float)it + 1.0f - clamp(nu, 0.0f, 1.0f);
-                    float t = clamp(mu / (float)max(1, u.maxIt), 0.0f, 1.0f);
-                    t = clamp((t - 0.015f) / 0.97f, 0.0f, 1.0f);
-                    // Contrast shaping (1.0 = neutral). Avoid divide-by-zero.
-                    float c = max(u.contrast, 0.01f);
-                    t = pow(t, 1.0f / c);
-                    acc += pickColor(u.palette, t, paletteTex, samp);
-                }
+            int it;
+            if (u.deepMode == 2) {
+                // Full Double-Double iteration
+                it = iterateMandelDD(cx, cy, max(1, u.maxIt), zx, zy);
+            } else {
+                // Double-Single iteration
+                it = iterateMandelDS(cx, cy, max(1, u.maxIt), zx, zy);
+            }
+
+            if (it < u.maxIt) {
+                float r2 = max(zx*zx + zy*zy, 1.0f + 1e-12f);
+                float log_zn = 0.5f * log(r2);
+                float nu = log(log_zn / log(2.0f)) / log(2.0f);
+                float mu = (float)it + 1.0f - clamp(nu, 0.0f, 1.0f);
+                float t = clamp(mu / (float)max(1, u.maxIt), 0.0f, 1.0f);
+                t = clamp((t - 0.015f) / 0.97f, 0.0f, 1.0f);
+                // Contrast shaping (1.0 = neutral). Avoid divide-by-zero.
+                float c = max(u.contrast, 0.01f);
+                t = pow(t, 1.0f / c);
+                acc += pickColor(u.palette, t, paletteTex, samp);
             }
         } else {
             float2 c = mapComplexF(gid, u);
