@@ -75,21 +75,34 @@ struct ContentView: View {
         var center: SIMD2<Double>
         var scale: Double
         var palette: Int
+        var paletteName: String?
         var deep: Bool
         var perturb: Bool
         var iterations: Int
         var contrast: Double
 
         enum CodingKeys: String, CodingKey {
-            case id, name, center, scale, palette, deep, perturb, iterations, contrast
+            case id, name, center, scale, palette, paletteName, deep, perturb, iterations, contrast
         }
 
-        init(id: UUID = UUID(), name: String, center: SIMD2<Double>, scale: Double, palette: Int, deep: Bool, perturb: Bool, iterations: Int, contrast: Double) {
+        init(
+            id: UUID = UUID(),
+            name: String,
+            center: SIMD2<Double>,
+            scale: Double,
+            palette: Int,
+            paletteName: String? = nil,
+            deep: Bool,
+            perturb: Bool,
+            iterations: Int,
+            contrast: Double
+        ) {
             self.id = id
             self.name = name
             self.center = center
             self.scale = scale
             self.palette = palette
+            self.paletteName = paletteName
             self.deep = deep
             self.perturb = perturb
             self.iterations = iterations
@@ -104,6 +117,7 @@ struct ContentView: View {
             self.center = try c.decode(SIMD2<Double>.self, forKey: .center)
             self.scale = try c.decode(Double.self, forKey: .scale)
             self.palette = try c.decode(Int.self, forKey: .palette)
+            self.paletteName = try c.decodeIfPresent(String.self, forKey: .paletteName)
             self.deep = try c.decodeIfPresent(Bool.self, forKey: .deep) ?? true
             self.perturb = try c.decodeIfPresent(Bool.self, forKey: .perturb) ?? false
             self.iterations = try c.decodeIfPresent(Int.self, forKey: .iterations) ?? 100
@@ -117,6 +131,7 @@ struct ContentView: View {
             try c.encode(center, forKey: .center)
             try c.encode(scale, forKey: .scale)
             try c.encode(palette, forKey: .palette)
+            try c.encodeIfPresent(paletteName, forKey: .paletteName)
             try c.encode(deep, forKey: .deep)
             try c.encode(perturb, forKey: .perturb)
             try c.encode(iterations, forKey: .iterations)
@@ -166,20 +181,6 @@ struct ContentView: View {
                         .padding(10)
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
                         .transition(.opacity.combined(with: .move(edge: .top)))
-                }
-                // Tiny HUD chip for SSAA status (dynamic across 2x/3x/4x) — disabled by default
-                if showSSAACHUD, isIdleForSSAA(), currentSSAAFactor() > 1 {
-                    Text("SSAA×\(currentSSAAFactor())")
-                        .font(.caption2).bold()
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 4)
-                        .background(.ultraThinMaterial, in: Capsule())
-                        .overlay(Capsule().strokeBorder(.white.opacity(0.2)))
-                        .padding(.top, 10)
-                        .padding(.trailing, 10)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
-                        .transition(.opacity)
-                        .accessibilityLabel("Super‑sampling SSAA×\(currentSSAAFactor())")
                 }
                 floatingControls(geo)
                     .padding(.horizontal, 12)
@@ -363,6 +364,7 @@ struct ContentView: View {
                                     center: vm.center,
                                     scale: vm.scalePixelsPerUnit,
                                     palette: palette,
+                                    paletteName: currentPaletteName,
                                     deep: true,
                                     perturb: false,
                                     iterations: vm.maxIterations,
@@ -790,16 +792,28 @@ private func optionsSheet() -> some View {
                 .font(compact ? Font.caption2 : Font.caption)
                 .monospaced()
                 .legibleText()
-          let f: Font = compact ? .caption2 : .caption
-          HStack(spacing: 6) {
-              Text("Color:")
-              Text(useDisplayP3 ? "P3" : "sRGB").bold()
-              Text("•")
-              Text("LUT \(lutWidth)")
-          }
-          .font(f)
-          .monospaced()
-          .legibleText()
+            // SSAA status (as plain HUD line, shown only when idle and factor > 1)
+            if isIdleForSSAA(), let label = ssaaLabel(currentSSAAFactor()) {
+                Text(label)
+                    .font(compact ? Font.caption2 : Font.caption)
+                    .monospaced()
+                    .legibleText()
+            }
+            // Current palette name (just above Color)
+            Text("Palette: \(currentPaletteName)")
+                .font(compact ? Font.caption2 : Font.caption)
+                .monospaced()
+                .legibleText()
+            let f: Font = compact ? .caption2 : .caption
+            HStack(spacing: 6) {
+                Text("Color:")
+                Text(useDisplayP3 ? "P3" : "sRGB").bold()
+                Text("•")
+                Text("LUT \(lutWidth)")
+            }
+            .font(f)
+            .monospaced()
+            .legibleText()
         }
         .padding(compact ? 6 : 8)
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
@@ -952,9 +966,40 @@ private func optionsSheet() -> some View {
         vm.renderer?.setContrast(Float(contrast))
 
         vm.pushViewport(currentPointsSize(size), screenScale: currentScreenScale())
-        vm.renderer?.setPalette(palette)
+
+        // --- Palette restoration (updates HUD + preview) ---
+        if bm.palette == 3 {
+            // LUT-based palette: prefer the saved name, otherwise rebuild from current name
+            if let savedName = bm.paletteName,
+               let opt = paletteOptions.first(where: { $0.name == savedName && $0.builtInIndex == nil }) {
+                currentPaletteName = savedName
+                if let img = makeLUTImage(stops: opt.stops, width: lutWidth, useDisplayP3: useDisplayP3) {
+                    vm.renderer?.setPaletteImage(img)
+                    vm.renderer?.setPalette(3)
+                } else {
+                    // Fallback to HSV if LUT build failed
+                    palette = 0
+                    currentPaletteName = "HSV"
+                    vm.renderer?.setPalette(0)
+                }
+            } else {
+                // No saved name—refresh using whatever currentPaletteName is
+                currentPaletteName = currentPaletteName.isEmpty ? "HSV" : currentPaletteName
+                refreshCurrentLUT()
+                vm.renderer?.setPalette(3)
+            }
+        } else {
+            // Built-in palettes (0..2). Find the friendly name from the catalog.
+            if let opt = paletteOptions.first(where: { $0.builtInIndex == bm.palette }) {
+                currentPaletteName = opt.name
+            } else {
+                currentPaletteName = (bm.palette == 0 ? "HSV" : bm.palette == 1 ? "Fire" : "Ocean")
+            }
+            vm.renderer?.setPalette(bm.palette)
+        }
+
         vm.renderer?.setDeepZoom(true)
-        currentPaletteName = (palette == 0 ? "HSV" : palette == 1 ? "Fire" : palette == 2 ? "Ocean" : currentPaletteName)
+        persistPaletteSelection()
         vm.requestDraw()
     }
     
