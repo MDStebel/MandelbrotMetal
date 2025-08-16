@@ -149,6 +149,29 @@ struct ContentView: View {
         // Fallback: infer from current scale (idle only)
         return ssaaFactorForScale(vm.scalePixelsPerUnit)
     }
+
+    // Dynamic Iterations slider range from the renderer (kept in sync with interactive/idle)
+    private var interactiveNowForRange: Bool { highQualityIdleRender ? isInteracting : true }
+
+    private func currentIterSliderRange() -> (min: Int, max: Int, def: Int) {
+        if let r = vm.renderer?.iterationSliderRange(interactive: interactiveNowForRange) {
+            return (r.min, r.max, r.default)
+        }
+        // Fallback if renderer not ready yet
+        let minVal = 80
+        let maxVal = interactiveNowForRange ? 6500 : 15000
+        return (minVal, maxVal, vm.maxIterations)
+    }
+
+    private func stepIterations(_ delta: Int) {
+        let r = currentIterSliderRange()
+        let v = min(r.max, max(r.min, vm.maxIterations + delta))
+        vm.maxIterations = v
+        vm.renderer?.setMaxIterations(v)
+        // Reassert the current palette in case anything tried to change it
+        applyCurrentPaletteToRenderer()
+        vm.requestDraw()
+    }
     
     @State private var bookmarks: [Bookmark] = []
     @State private var showAddBookmark = false
@@ -168,45 +191,83 @@ struct ContentView: View {
     private let kPaletteNameKey = "palette_name_v1"
     private let kHQIdleKey = "hq_idle_render_v1"
     
-    @ViewBuilder
-    private func mainContent(_ geo: GeometryProxy) -> some View {
-        ZStack {
-            fractalCanvas(geo)
-            hud
-                .padding(10)
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-            if let banner = fallbackBanner {
-                Text("⚠️ \(banner)")
-                    .font(.caption2)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 6)
-                    .background(.ultraThinMaterial, in: Capsule())
-                    .overlay(Capsule().strokeBorder(.white.opacity(0.2)))
+    private func mainContent(_ geo: GeometryProxy) -> AnyView {
+        var v: AnyView = AnyView(
+            ZStack {
+                fractalCanvas(geo)
+                hud
                     .padding(10)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
-                    .transition(.opacity .combined(with: .move(edge: .top)))
-            }
-            floatingControls(geo)
-                .padding(.horizontal, 12)
-                .padding(.bottom, 8)
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
-            // Progress overlay during capture
-            if isCapturing {
-                VStack(spacing: 12) {
-                    ProgressView("Rendering…")
-                        .progressViewStyle(.circular)
-                    Text("Preparing image, please wait")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                if let banner = fallbackBanner {
+                    Text("⚠️ \(banner)")
+                        .font(.caption2)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .background(.ultraThinMaterial, in: Capsule())
+                        .overlay(Capsule().strokeBorder(.white.opacity(0.2)))
+                        .padding(10)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+                        .transition(.opacity .combined(with: .move(edge: .top)))
                 }
-                .padding(20)
-                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-                .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(.white.opacity(0.15)))
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+                floatingControls(geo)
+                    .padding(.horizontal, 12)
+                    .padding(.bottom, 8)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+                // Progress overlay during capture
+                if isCapturing {
+                    VStack(spacing: 12) {
+                        ProgressView("Rendering…")
+                            .progressViewStyle(.circular)
+                        Text("Preparing image, please wait")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(20)
+                    .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(.white.opacity(0.15)))
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+                }
             }
-        }
-        .background(Color.black.ignoresSafeArea())
-        .onAppear {
+        )
+
+        // Break up the long modifier chain explicitly to help the type checker
+        v = AnyView(v.background(Color.black.ignoresSafeArea()))
+        
+        v = AnyView(v.sheet(isPresented: $showAddBookmark) {
+            NavigationStack {
+                Form {
+                    Section("Name") {
+                        TextField("Bookmark name", text: $newBookmarkName)
+                            .textInputAutocapitalization(.words)
+                            .submitLabel(.done)
+                    }
+                    Section {
+                        Button("Save") {
+                            addCurrentBookmark(named: newBookmarkName)
+                            newBookmarkName = ""
+                            showAddBookmark = false
+                        }
+                        Button("Cancel", role: .cancel) { showAddBookmark = false }
+                    }
+                }
+                .navigationTitle("Add Bookmark")
+                .toolbar {
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("Save") {
+                            addCurrentBookmark(named: newBookmarkName)
+                            newBookmarkName = ""
+                            showAddBookmark = false
+                        }
+                        .disabled(newBookmarkName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    }
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Close") { showAddBookmark = false }
+                    }
+                }
+            }
+        })
+
+        v = AnyView(v.onAppear {
             if let s = vm.loadState() {
                 // Deep Zoom is always on now; ignore saved flag
                 palette = s.palette
@@ -216,6 +277,7 @@ struct ContentView: View {
             vm.requestDraw()
             vm.renderer?.setDeepZoom(true)
             vm.renderer?.setHighQualityIdle(highQualityIdleRender)
+            vm.renderer?.setAutoIterationsEnabled(autoIterations)
             vm.renderer?.setInteractive(false, baseIterations: vm.maxIterations)
             // Apply restored contrast to renderer after loading state
             vm.renderer?.setContrast(Float(contrast))
@@ -242,18 +304,21 @@ struct ContentView: View {
                     }
                 }
             }
-        }
-        .onChange(of: contrast) { _, newVal in
+        })
+
+        v = AnyView(v.onChange(of: contrast) { _, newVal in
             vm.renderer?.setContrast(Float(newVal))
             vm.saveState(palette: palette, contrast: newVal)
-        }
-        .onDisappear {
+        })
+
+        v = AnyView(v.onDisappear {
             if let obs = fallbackObserver {
                 NotificationCenter.default.removeObserver(obs)
                 fallbackObserver = nil
             }
-        }
-        .onChange(of: geo.size) { _, newSize in
+        })
+
+        v = AnyView(v.onChange(of: geo.size) { _, newSize in
             // Geometry changed (rotation/split view/resize). Recompute drawable size
             // from the new points size so the aspect ratio stays correct.
             DispatchQueue.main.async {
@@ -265,41 +330,53 @@ struct ContentView: View {
                 vm.pushViewport(currentPointsSize(newSize), screenScale: currentScreenScale())
                 vm.requestDraw()
             }
-        }
-        .onChange(of: palette) { _, _ in
+        })
+
+        v = AnyView(v.onChange(of: palette) { _, _ in
             persistPaletteSelection()
-        }
-        .onChange(of: highQualityIdleRender) { _, newValue in
+        })
+
+        v = AnyView(v.onChange(of: useDisplayP3) { _, _ in refreshCurrentLUT() })
+        v = AnyView(v.onChange(of: lutWidth) { _, _ in refreshCurrentLUT() })
+
+        v = AnyView(v.onChange(of: isInteracting) { _, active in
+            let interactiveNow = highQualityIdleRender ? active : true
+            vm.renderer?.setInteractive(interactiveNow, baseIterations: vm.maxIterations)
+            applyCurrentPaletteToRenderer()
+            vm.requestDraw()
+        })
+
+        v = AnyView(v.onChange(of: highQualityIdleRender) { _, newValue in
             UserDefaults.standard.set(newValue, forKey: kHQIdleKey)
             vm.renderer?.setHighQualityIdle(newValue)
             // Re-evaluate interactive mode based on the switch
             let interactiveNow = newValue ? isInteracting : true
             vm.renderer?.setInteractive(interactiveNow, baseIterations: vm.maxIterations)
+            applyCurrentPaletteToRenderer()
             vm.requestDraw()
-        }
-        .onChange(of: useDisplayP3) { _, _ in refreshCurrentLUT() }
-        .onChange(of: lutWidth) { _, _ in refreshCurrentLUT() }
-        .onChange(of: isInteracting) { _, active in
-            let interactiveNow = highQualityIdleRender ? active : true
-            vm.renderer?.setInteractive(interactiveNow, baseIterations: vm.maxIterations)
-            vm.requestDraw()
-        }
-        .onChange(of: currentPaletteName) { _, _ in persistPaletteSelection() }
-        .onChange(of: vm.center) { _, _ in
-            vm.saveState(palette: palette, contrast: contrast)
-        }
-        .onChange(of: vm.scalePixelsPerUnit) { _, _ in
-            vm.saveState(palette: palette, contrast: contrast)
-        }
-        .onChange(of: vm.maxIterations) { _, _ in
-            vm.saveState(palette: palette, contrast: contrast)
-        }
-        .onChange(of: scenePhase) { _, newPhase in
+        })
+
+        v = AnyView(v.onChange(of: autoIterations) { _, newVal in
+            vm.renderer?.setAutoIterationsEnabled(newVal)
+            if !newVal {
+                // Switching to manual: immediately apply current slider value
+                vm.renderer?.setMaxIterations(vm.maxIterations)
+                vm.requestDraw()
+            }
+        })
+
+        v = AnyView(v.onChange(of: currentPaletteName) { _, _ in persistPaletteSelection() })
+        v = AnyView(v.onChange(of: vm.center) { _, _ in vm.saveState(palette: palette, contrast: contrast) })
+        v = AnyView(v.onChange(of: vm.scalePixelsPerUnit) { _, _ in vm.saveState(palette: palette, contrast: contrast) })
+        v = AnyView(v.onChange(of: vm.maxIterations) { _, _ in vm.saveState(palette: palette, contrast: contrast) })
+
+        v = AnyView(v.onChange(of: scenePhase) { _, newPhase in
             if newPhase == .background {
                 persistPaletteSelection()
             }
-        }
-        .sheet(isPresented: $showPalettePicker) {
+        })
+
+        v = AnyView(v.sheet(isPresented: $showPalettePicker) {
             NavigationStack {
                 PalettePickerView(selected: currentPaletteName, options: paletteOptions) { opt in
                     applyPaletteOption(opt)
@@ -308,11 +385,13 @@ struct ContentView: View {
                 .navigationTitle("Palettes")
                 .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Close") { showPalettePicker = false } } }
             }
-        }
-        .sheet(isPresented: $showShare) {
+        })
+
+        v = AnyView(v.sheet(isPresented: $showShare) {
             ShareSheet(items: shareItems)
-        }
-        .sheet(isPresented: $showCaptureSheet) {
+        })
+
+        v = AnyView(v.sheet(isPresented: $showCaptureSheet) {
             NavigationStack {
                 Form {
                     Section("Resolution") {
@@ -335,8 +414,9 @@ struct ContentView: View {
                     ToolbarItem(placement: .cancellationAction) { Button("Close") { showCaptureSheet = false } }
                 }
             }
-        }
-        .sheet(isPresented: $showCustomRes) {
+        })
+
+        v = AnyView(v.sheet(isPresented: $showCustomRes) {
             NavigationStack {
                 Form {
                     Section(header: Text("Custom Resolution")) {
@@ -350,8 +430,9 @@ struct ContentView: View {
                     ToolbarItem(placement: .confirmationAction) { Button("Done") { snapRes = .custom; showCustomRes = false } }
                 }
             }
-        }
-        .sheet(isPresented: $showHelp) {
+        })
+
+        v = AnyView(v.sheet(isPresented: $showHelp) {
             NavigationStack {
                 HelpSheetView()
                     .navigationTitle("Help")
@@ -359,8 +440,9 @@ struct ContentView: View {
                         ToolbarItem(placement: .cancellationAction) { Button("Close") { showHelp = false } }
                     }
             }
-        }
-        .sheet(isPresented: $showAbout) {
+        })
+
+        v = AnyView(v.sheet(isPresented: $showAbout) {
             VStack(spacing: 16) {
                 Text("Mandelbrot Metal").font(.title).bold()
                 Text(appCopyright())
@@ -370,47 +452,27 @@ struct ContentView: View {
                 Button("Close") { showAbout = false }.padding()
             }
             .padding()
-        }
-        .sheet(isPresented: $showAddBookmark) {
-            NavigationStack {
-                Form { TextField("Name", text: $newBookmarkName) }
-                    .navigationTitle("Add Bookmark")
-                    .toolbar {
-                        ToolbarItem(placement: .cancellationAction) { Button("Cancel") { showAddBookmark = false } }
-                        ToolbarItem(placement: .confirmationAction) { Button("Save") {
-                            let bm = Bookmark(
-                                name: newBookmarkName.isEmpty ? "Bookmark \(bookmarks.count+1)" : newBookmarkName,
-                                center: vm.center,
-                                scale: vm.scalePixelsPerUnit,
-                                palette: palette,
-                                paletteName: currentPaletteName,
-                                deep: true,
-                                perturb: false,
-                                iterations: vm.maxIterations,
-                                contrast: contrast
-                            )
-                            bookmarks.append(bm)
-                            saveBookmarks()
-                            showAddBookmark = false
-                        } }
-                    }
-            }
-        }
-        .sheet(isPresented: .constant(false)) { EmptyView() } // placeholder
-        .sheet(isPresented: $showOptionsSheet) {
+        })
+
+        v = AnyView(v.sheet(isPresented: .constant(false)) { EmptyView() })
+
+        v = AnyView(v.sheet(isPresented: $showOptionsSheet) {
             optionsSheet()
-        }
-        .onReceive(Timer.publish(every: 0.25, on: .main, in: .common).autoconnect()) { _ in
+        })
+
+        v = AnyView(v.onReceive(Timer.publish(every: 0.25, on: .main, in: .common).autoconnect()) { _ in
             let newFactor = currentSSAAFactor()
             if newFactor != ssaaSamples {
                 withAnimation(.easeInOut(duration: 0.15)) {
                     ssaaSamples = newFactor
                 }
             }
-        }
-        .navigationTitle("Mandelbrot Metal")
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
+        })
+
+        v = AnyView(v.navigationTitle("Mandelbrot Metal"))
+        v = AnyView(v.navigationBarTitleDisplayMode(.inline))
+
+        v = AnyView(v.toolbar {
             // Compact (iPhone / small iPad portrait): lightweight top toolbar
             if hSize == .compact {
                 ToolbarItemGroup(placement: .topBarLeading) {
@@ -461,6 +523,43 @@ struct ContentView: View {
                     }
                     .accessibilityLabel("Info")
                 }
+                // Bottom bar for iPhone (compact width)
+                ToolbarItem(placement: .bottomBar) {
+                    iPhoneBottomToolbar(
+                        iterations: $vm.maxIterations,
+                        iterationRange: currentIterSliderRange(),
+                        contrast: $contrast,
+                        autoIterations: $autoIterations,
+                        highQualityIdle: $highQualityIdleRender,
+                        onAddBookmark: {
+                            newBookmarkName = ""
+                            showAddBookmark = true
+                        },
+                        onSelectBookmark: { bm in
+                            applyBookmark(bm, size: currentPointsSize(UIScreen.main.bounds.size))
+                        },
+                        onClearBookmarks: {
+                            bookmarks.removeAll()
+                            saveBookmarks()
+                        },
+                        onOpenPalettePicker: {
+                            showPalettePicker = true
+                        },
+                        onReset: {
+                            reset(UIScreen.main.bounds.size)
+                        },
+                        onIterChanged: { it in
+                            vm.renderer?.setAutoIterationsEnabled(false)
+                            vm.renderer?.setMaxIterations(it)
+                            vm.requestDraw()
+                        },
+                        onContrastChanged: { c in
+                            vm.renderer?.setContrast(Float(c))
+                            vm.requestDraw()
+                        },
+                        bookmarks: bookmarks
+                    )
+                }
             }
             // Regular (iPad / large): keep top bar clean (floatingControls covers primary actions)
             else {
@@ -475,7 +574,9 @@ struct ContentView: View {
                     .accessibilityLabel("Info")
                 }
             }
-        }
+        })
+
+        return v
     }
 
     var body: some View {
@@ -520,7 +621,8 @@ struct ContentView: View {
                     Toggle("Auto Iterations", isOn: $autoIterations)
                     HStack {
                         Text("Iterations")
-                        Slider(value: iterBinding, in: 100...5000, step: 50.0)
+                        let r = currentIterSliderRange()
+                        Slider(value: iterBinding, in: Double(r.min)...Double(r.max), step: 50.0)
                     }
                 }
 
@@ -556,11 +658,46 @@ struct ContentView: View {
         .presentationDragIndicator(.visible)
     }
     
+    /// Reapply the currently selected palette to the renderer (no persistence side effects).
+    private func applyCurrentPaletteToRenderer() {
+        guard let opt = paletteOptions.first(where: { $0.name == currentPaletteName }) else { return }
+        if let idx = opt.builtInIndex {
+            // Built-in GPU palette
+            palette = idx
+            vm.renderer?.setPalette(idx)
+        } else {
+            // LUT-backed palette
+            if let img = makeLUTImage(stops: opt.stops, width: lutWidth, useDisplayP3: useDisplayP3) {
+                vm.renderer?.setPaletteImage(img)
+                vm.renderer?.setPalette(3)
+                palette = 3
+            }
+        }
+    }
+    
     private func persistPaletteSelection() {
         // Persist the friendly palette name for HUD/restore
         UserDefaults.standard.set(currentPaletteName, forKey: kPaletteNameKey)
+
+        // Re-apply the palette to the renderer to avoid any stale reverts from other writes
+        if let opt = paletteOptions.first(where: { $0.name == currentPaletteName }) {
+            if let idx = opt.builtInIndex {
+                // Built-in GPU palette
+                palette = idx
+                vm.renderer?.setPalette(idx)
+            } else {
+                // LUT-backed palette (rebuild and set slot 3)
+                if let img = makeLUTImage(stops: opt.stops, width: lutWidth, useDisplayP3: useDisplayP3) {
+                    vm.renderer?.setPaletteImage(img)
+                    vm.renderer?.setPalette(3)
+                    palette = 3
+                }
+            }
+        }
+
         // Persist core render state alongside the palette
         vm.saveState(palette: palette, contrast: contrast)
+        vm.requestDraw()
     }
 
     private func currentScreenScale() -> CGFloat {
@@ -772,14 +909,15 @@ struct ContentView: View {
                         Divider().frame(height: 22).opacity(0.18)
 
                         HStack(spacing: 6) {
+                            let r = currentIterSliderRange()
                             Text("Iterations").lineLimit(1).minimumScaleFactor(0.85)
-                            Button { let v = max(100, vm.maxIterations - 50); vm.maxIterations = v; vm.renderer?.setMaxIterations(v); vm.requestDraw() } label: { Image(systemName: "minus") }
+                            Button { stepIterations(-50) } label: { Image(systemName: "minus") }
                                 .buttonStyle(.borderless).controlSize(.small)
-                            Slider(value: iterBinding, in: 100...5000, step: 50)
+                            Slider(value: iterBinding, in: Double(r.min)...Double(r.max), step: 50)
                                 .controlSize(.small)
                                 .frame(width: min(max(w * 0.30, 200), veryNarrow ? 260 : 380))
                                 .layoutPriority(2)
-                            Button { let v = min(5000, vm.maxIterations + 50); vm.maxIterations = v; vm.renderer?.setMaxIterations(v); vm.requestDraw() } label: { Image(systemName: "plus") }
+                            Button { stepIterations(50) } label: { Image(systemName: "plus") }
                                 .buttonStyle(.borderless).controlSize(.small)
                             Text(autoIterations ? "\(effectiveIterations) (auto)" : "\(vm.maxIterations)")
                                 .font(.caption).foregroundStyle(.secondary)
@@ -792,17 +930,18 @@ struct ContentView: View {
 
                     // Compact fallback (short labels, smaller slider)
                     HStack(alignment: .center, spacing: 10) {
+                        let r = currentIterSliderRange()
                         Button(action: { reset(geo.size) }) { Image(systemName: "arrow.counterclockwise") }
                             .controlSize(.small).disabled(isCapturing)
                         LabeledToggle(title: "Auto", systemImage: "aqi.medium", isOn: $autoIterations)
                         LabeledToggle(title: "HQ",   systemImage: "sparkles",   isOn: $highQualityIdleRender)
                         Text("Iter").font(.caption)
-                        Button { let v = max(100, vm.maxIterations - 50); vm.maxIterations = v; vm.renderer?.setMaxIterations(v); vm.requestDraw() } label: { Image(systemName: "minus") }
+                        Button { stepIterations(-50) } label: { Image(systemName: "minus") }
                             .buttonStyle(.borderless).controlSize(.small)
-                        Slider(value: iterBinding, in: 100...5000, step: 50)
+                        Slider(value: iterBinding, in: Double(r.min)...Double(r.max), step: 50)
                             .controlSize(.small)
                             .frame(width: min(max(w * 0.24, 160), 240))
-                        Button { let v = min(5000, vm.maxIterations + 50); vm.maxIterations = v; vm.renderer?.setMaxIterations(v); vm.requestDraw() } label: { Image(systemName: "plus") }
+                        Button { stepIterations(50) } label: { Image(systemName: "plus") }
                             .buttonStyle(.borderless).controlSize(.small)
                     }
                 }
@@ -997,9 +1136,14 @@ struct ContentView: View {
         Binding<Double>(
             get: { Double(vm.maxIterations) },
             set: { newVal in
-                let clamped = min(5000, max(100, Int(newVal.rounded())))
+                let r = currentIterSliderRange()
+                let clamped = min(r.max, max(r.min, Int(newVal.rounded())))
                 vm.maxIterations = clamped
+                // Force manual mode on user drag to avoid auto override
+                vm.renderer?.setAutoIterationsEnabled(false)
                 vm.renderer?.setMaxIterations(clamped)
+                // Reassert the current palette in case anything tried to change it
+                applyCurrentPaletteToRenderer()
                 vm.requestDraw()
             }
         )
@@ -1106,17 +1250,23 @@ struct ContentView: View {
         vm.pushViewport(currentPointsSize(size), screenScale: currentScreenScale())
         if autoIterations {
             vm.renderer?.setMaxIterations(autoIterationsForScale(vm.scalePixelsPerUnit))
+        } else {
+            vm.renderer?.setMaxIterations(vm.maxIterations)
         }
+        applyCurrentPaletteToRenderer()
         vm.requestDraw()
     }
-    
+
     private func applyDrag(_ value: DragGesture.Value, size: CGSize) {
         vm.center += dragToComplex(value.translation)
         pendingCenter = .zero
         vm.pushViewport(currentPointsSize(size), screenScale: currentScreenScale())
         if autoIterations {
             vm.renderer?.setMaxIterations(autoIterationsForScale(vm.scalePixelsPerUnit))
+        } else {
+            vm.renderer?.setMaxIterations(vm.maxIterations)
         }
+        applyCurrentPaletteToRenderer()
         vm.requestDraw()
     }
     
@@ -1163,8 +1313,8 @@ struct ContentView: View {
     
     private func doubleTapZoom(point: CGPoint, size: CGSize, factor: Double) {
         let ds = vm.mtkView?.drawableSize
-        let pxW = ds?.width ?? floor(size.width * currentScreenScale())
-        let pxH = ds?.height ?? floor(size.height * currentScreenScale())
+        let pxW = ds?.width ?? (size.width * currentScreenScale()).rounded(.down)
+        let pxH = ds?.height ?? (size.height * currentScreenScale()).rounded(.down)
         let s = Double(pxW / size.width)   // pixels-per-point actually in use
         let pixelW = Double(pxW)
         let pixelH = Double(pxH)
@@ -1191,8 +1341,9 @@ struct ContentView: View {
         vm.center = bm.center
         vm.scalePixelsPerUnit = bm.scale
         palette = bm.palette
-        // Restore iterations (clamped to UI range) and contrast
-        let it = min(5000, max(100, bm.iterations))
+        // Restore iterations (clamped to the current dynamic UI range) and contrast
+        let r = currentIterSliderRange()
+        let it = min(r.max, max(r.min, bm.iterations))
         vm.maxIterations = it
         vm.renderer?.setMaxIterations(it)
 
@@ -1210,11 +1361,14 @@ struct ContentView: View {
                 if let img = makeLUTImage(stops: opt.stops, width: lutWidth, useDisplayP3: useDisplayP3) {
                     vm.renderer?.setPaletteImage(img)
                     vm.renderer?.setPalette(3)
+                    palette = 3
+                    vm.requestDraw()
                 } else {
                     // Fallback to HSV if LUT build failed
                     palette = 0
                     currentPaletteName = "HSV"
                     vm.renderer?.setPalette(0)
+                    vm.requestDraw()
                 }
             } else {
                 // No saved name—refresh using whatever currentPaletteName is
@@ -1280,8 +1434,31 @@ struct ContentView: View {
                 vm.renderer?.setPaletteImage(img)
                 vm.renderer?.setPalette(3)
                 vm.requestDraw()
+                palette = 3
+                // Keep currentPaletteName unchanged; user can rename via picker
             }
         }
+    }
+    private func addCurrentBookmark(named name: String) {
+        // Save exactly what’s on screen
+        let size = vm.mtkView?.bounds.size ?? UIScreen.main.bounds.size
+        commitPendingInteractions(size)
+
+        let title = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let finalName = title.isEmpty ? "Bookmark \(bookmarks.count + 1)" : title
+        let bm = Bookmark(
+            name: finalName,
+            center: vm.center,
+            scale: vm.scalePixelsPerUnit,
+            palette: palette,
+            paletteName: (palette == 3 ? currentPaletteName : nil), // only for LUT palettes
+            deep: true,
+            perturb: false,
+            iterations: vm.maxIterations,
+            contrast: contrast
+        )
+        bookmarks.append(bm)
+        saveBookmarks()
     }
     
     private func saveBookmarks() {
@@ -1335,6 +1512,11 @@ struct ContentView: View {
         isCapturing = true
         print("[UI] saveCurrentSnapshot() starting… (single‑pass canvas capture)")
         
+        // Preserve & reapply the current palette selection (built‑in or LUT)
+        let priorPaletteIndex = palette
+        let priorPaletteName  = currentPaletteName
+        applyCurrentPaletteToRenderer()
+        
         // Desired export dimensions (used after capture for scaling only)
         let exportDims: (Int, Int)
         switch snapRes {
@@ -1351,7 +1533,8 @@ struct ContentView: View {
         commitPendingInteractions(commitSize)
         
         // Use current view settings
-        renderer.setPalette(palette)
+        // Reassert the active palette before export (handles LUT image if needed)
+        applyCurrentPaletteToRenderer()
         let effectiveIters = autoIterations ? autoIterationsForScale(vm.scalePixelsPerUnit) : vm.maxIterations
         let exportIters = min(2_500, max(100, effectiveIters))
         vm.maxIterations = exportIters
@@ -1382,6 +1565,10 @@ struct ContentView: View {
                     finalImg = baseImg
                 }
                 self.handleSnapshotResult(finalImg)
+                // Ensure palette remains unchanged after capture
+                self.currentPaletteName = priorPaletteName
+                self.palette = priorPaletteIndex
+                self.applyCurrentPaletteToRenderer()
                 let dt = CACurrentMediaTime() - t0
                 print("[UI] capture finished in \(String(format: "%.2f", dt))s (canvas \(canvasW)x\(canvasH) → export \(ew)x\(eh))")
             }
@@ -1462,6 +1649,137 @@ struct ContentView: View {
     
 }
 
+/// Compact iPhone bottom toolbar with Bookmarks (left), Iteration slider (center), Palette (right),
+/// and an overflow menu for Contrast/Reset/toggles.
+private struct iPhoneBottomToolbar: View {
+    // Core bindings/state
+    @Binding var iterations: Int
+    let iterationRange: (min: Int, max: Int, def: Int)
+    @Binding var contrast: Double
+    @Binding var autoIterations: Bool
+    @Binding var highQualityIdle: Bool
+
+    // Actions
+    var onAddBookmark: () -> Void
+    var onSelectBookmark: (Bookmark) -> Void
+    var onClearBookmarks: () -> Void
+    var onOpenPalettePicker: () -> Void
+    var onReset: () -> Void
+    var onIterChanged: (Int) -> Void     // push to renderer immediately
+    var onContrastChanged: (Double) -> Void // push to renderer immediately
+
+    // Data
+    var bookmarks: [Bookmark]
+
+    var body: some View {
+        GeometryReader { geo in
+            let w = geo.size.width
+            let showShortSlider = w > 320 // hide slider on ultra-narrow widths
+
+            HStack(spacing: 12) {
+                // Left: Bookmarks
+                Menu("Bookmarks") {
+                    Button("Add Current…", action: onAddBookmark)
+                    if !bookmarks.isEmpty {
+                        Divider()
+                        ForEach(bookmarks) { bm in
+                            Button(bm.name) { onSelectBookmark(bm) }
+                        }
+                        Divider()
+                        Button("Clear All", role: .destructive, action: onClearBookmarks)
+                    }
+                }
+                .font(.subheadline)
+
+                // Center: Iteration slider (compact)
+                if showShortSlider {
+                    HStack(spacing: 6) {
+                        Button { stepIterations(-50) } label: { Image(systemName: "minus") }
+                            .buttonStyle(.borderless)
+
+                        Slider(
+                            value: Binding(
+                                get: { Double(iterations) },
+                                set: { newVal in
+                                    let clamped = clamp(Int(newVal.rounded()), iterationRange.min, iterationRange.max)
+                                    iterations = clamped
+                                    onIterChanged(clamped)
+                                }
+                            ),
+                            in: Double(iterationRange.min)...Double(iterationRange.max),
+                            step: 50
+                        )
+                        .frame(width: sliderWidth(for: w))
+                        .accessibilityLabel("Iterations")
+
+                        Button { stepIterations(50) } label: { Image(systemName: "plus") }
+                            .buttonStyle(.borderless)
+                    }
+                    .font(.subheadline)
+                }
+
+                Spacer(minLength: 4)
+
+                // Right: Palette + Overflow
+                Button(action: onOpenPalettePicker) {
+                    Image(systemName: "paintpalette")
+                        .imageScale(.large)
+                }
+                .accessibilityLabel("Palette Picker")
+
+                Menu {
+                    // Contrast
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Contrast")
+                            .font(.footnote).foregroundStyle(.secondary)
+                        Slider(
+                            value: Binding(
+                                get: { contrast },
+                                set: { newVal in
+                                    contrast = newVal
+                                    onContrastChanged(newVal)
+                                }
+                            ),
+                            in: 0.5...1.5,
+                            step: 0.01
+                        )
+                    }
+                    .padding(.vertical, 4)
+
+                    Divider()
+
+                    Toggle("Auto Iterations", isOn: $autoIterations)
+                    Toggle("High-Quality Idle", isOn: $highQualityIdle)
+
+                    Divider()
+
+                    Button("Reset View", role: .none, action: onReset)
+                } label: {
+                    Image(systemName: "ellipsis.circle")
+                        .imageScale(.large)
+                }
+                .accessibilityLabel("More Options")
+            }
+            .padding(.horizontal, 10)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+        }
+        .frame(height: 44) // toolbar height
+    }
+
+    private func stepIterations(_ delta: Int) {
+        let v = clamp(iterations + delta, iterationRange.min, iterationRange.max)
+        iterations = v
+        onIterChanged(v)
+    }
+
+    private func sliderWidth(for w: CGFloat) -> CGFloat {
+        // Keeps things readable but compact
+        min(max(w * 0.36, 160), 260)
+    }
+
+    private func clamp<T: Comparable>(_ x: T, _ a: T, _ b: T) -> T { min(max(x, a), b) }
+}
+
 // Small helper to align a switch with its label and icon consistently
 private struct LabeledToggle: View {
     let title: String
@@ -1479,6 +1797,12 @@ private struct LabeledToggle: View {
 }
 
 // MARK: - Legibility Modifier
+extension View {
+    /// Erase complex view types to AnyView to help the SwiftUI type checker on long modifier chains.
+    @inline(__always)
+    func typeErased() -> AnyView { AnyView(self) }
+}
+
 extension View {
     /// Boost text/icon legibility over busy backgrounds
     func legibleText() -> some View {
@@ -1529,8 +1853,8 @@ struct HelpSheetView: View {
                     Text("Iterations & Contrast")
                         .font(.headline)
                     VStack(alignment: .leading, spacing: 8) {
-                        Text("• **Iterations**: slider (100–5,000) with ±50 step buttons. Optional **Auto Iterations** adapts to zoom.")
-                        Text("• **Contrast**: 0.50–1.50. **Reset** restores contrast to **1.00** along with default view.")
+                        Text("• **Iterations**: slider — **80–6,500 while interacting**, up to **15,000 when idle (HQ Idle on)**; ±50 step buttons. **Auto Iterations** adapts to zoom; turn it off to set iterations manually.")
+                        Text("• **Contrast**: 0.50–1.50 with a gentle response near **1.00** (small slider moves make small visual changes). **Reset** restores contrast to **1.00** along with default view.")
                     }
                 }
                 Group {

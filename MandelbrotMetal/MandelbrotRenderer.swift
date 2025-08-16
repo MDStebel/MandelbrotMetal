@@ -66,6 +66,10 @@ final class MandelbrotRenderer: NSObject, MTKViewDelegate {
     private var refinePending = false
     private var highQualityIdle = true
     
+    // When false, the renderer respects the UI-provided maxIterations and will NOT
+    // auto-suggest/override iterations during viewport updates.
+    private var autoIterationsEnabled: Bool = true
+    
     /// Optional manual precision override: nil = auto, 0=float, 1=DS, 2=DD
     private var precisionOverride: Int32? = nil
     
@@ -278,15 +282,45 @@ final class MandelbrotRenderer: NSObject, MTKViewDelegate {
         return result
     }
 
+    // MARK: - Iteration suggestion
+    /// Returns a suggested maxIt based on zoom (pixels-per-unit), quality, precision and SSAA.
+    /// Tuned for BGRA8 + escape radius 2 with smoothing.
+    private func suggestedIterations(scalePPU z: Double,
+                                     interactive: Bool,
+                                     deepMode: Int32,          // 0=float, 1=DS, 2=DD
+                                     ssaaFactor: Int) -> Int {
+        // Base grows ~log2(z). Coeffs chosen to match practical buckets.
+        let logz = max(0.0, log2(z)) // 0 at very shallow zooms
+        let baseIdle = 220.0 + 95.0 * logz          // idle curve
+        let baseLive =  90.0 + 55.0 * logz          // interactive curve (faster)
+
+        // Slight bump for higher-precision math where creases get crisper
+        let precisionBoost: Double = (deepMode == 1 ? 1.10 : (deepMode == 2 ? 1.20 : 1.0))
+
+        // SSAA already cleans edges; don’t over-bump iterations when SSAA is high.
+        // Treat SSAA as worth ~5–10% fewer iterations per step beyond 1×.
+        let ssaaDamp = 1.0 / (1.0 + 0.08 * Double(max(1, ssaaFactor) - 1))
+
+        let raw = (interactive ? baseLive : baseIdle) * precisionBoost * ssaaDamp
+
+        // Clamp for sanity & stability
+        return Int(raw.clamped(to: 80.0...(interactive ? 6500.0 : 15000.0)).rounded())
+    }
+
     // MARK: - Public knobs (called from UI)
+    /// Enable/disable auto iteration adjustment based on zoom and quality.
+    func setAutoIterationsEnabled(_ on: Bool) {
+        autoIterationsEnabled = on
+    }
+
     /// Toggle fast/idle quality (keeps full resolution; adjusts iteration count only).
     func setInteractive(_ on: Bool, baseIterations: Int) {
         uniforms.pixelStep = 1
+        // keep API stable but ignore caller-provided base; compute from zoom and quality
+        _ = baseIterations
         if on {
-            uniforms.maxIt = Int32(max(50, baseIterations / 2))
             refinePending = false
         } else {
-            uniforms.maxIt = Int32(max(1, baseIterations))
             refinePending = highQualityIdle
         }
         // Recompute SSAA from last zoom using hysteresis; do not force a downshift due to the toggle.
@@ -305,15 +339,63 @@ final class MandelbrotRenderer: NSObject, MTKViewDelegate {
                                                        "samples": Int(newSamples),
                                                        "factor": self.ssaaFactor])
         }
+        // Recompute iterations based on current zoom/precision/SSAA and interactive state.
+        if autoIterationsEnabled {
+            let proposedIt = suggestedIterations(scalePPU: max(1.0, lastScalePPU),
+                                                 interactive: on,
+                                                 deepMode: uniforms.deepMode,
+                                                 ssaaFactor: ssaaFactor)
+            let range = iterationSliderRange(interactive: on)
+            let clamped = max(range.min, min(proposedIt, range.max))
+            uniforms.maxIt = Int32(clamped)
+        } else {
+            // Manual mode: respect the caller-provided baseIterations
+            let range = iterationSliderRange(interactive: on)
+            let clamped = max(range.min, min(baseIterations, range.max))
+            uniforms.maxIt = Int32(clamped)
+        }
         needsRender = true
         DispatchQueue.main.async { [weak self] in self?.mtkViewRef?.setNeedsDisplay() }
     }
     
     func setContrast(_ value: Float) {
-        // avoid divide-by-zero in kernel; 1.0 = neutral
-        uniforms.contrast = max(0.01, value)
+        // Low-level setter: 1.0 = neutral. Clamp to a conservative range.
+        let v = max(0.25, min(value, 3.0))
+        uniforms.contrast = v
         needsRender = true
         mtkViewRef?.setNeedsDisplay()
+    }
+
+    /// UI-friendly contrast setter. Accepts a normalized slider in [0, 1] and maps it
+    /// to a perceptually smoother contrast with a deadband around 1.0 so small slider
+    /// moves don't cause big color jumps. Endpoints roughly map to ~0.5× and ~2.0×.
+    func setContrastFromSlider(_ t: Float) {
+        // Clamp input
+        let tt = max(0.0, min(1.0, t))
+        // Center: 0.5 -> 1.0 contrast
+        var d = tt - 0.5
+
+        // Deadband around neutral (~±4%) so tiny moves do nothing visible
+        let dead: Float = 0.04
+        if abs(d) <= dead {
+            setContrast(1.0)
+            return
+        }
+
+        // Remove deadband and normalize to [0,1]
+        let sign: Float = d >= 0 ? 1.0 : -1.0
+        d = (abs(d) - dead) / (0.5 - dead)
+
+        // Soft S-curve (smoothstep) to tame mid-range sensitivity
+        let eased = d * d * (3 - 2 * d)
+
+        // Exponential mapping around 1.0; k ~= ln(2) yields ~0.5× … 2.0×
+        let k: Float = log(2.0)
+        let mapped = exp(sign * k * eased)
+
+        // Final clamp to conservative range the kernel likes
+        let contrast = max(0.25, min(mapped, 3.0))
+        setContrast(contrast)
     }
     
     func setPalette(_ mode: Int) {
@@ -322,9 +404,33 @@ final class MandelbrotRenderer: NSObject, MTKViewDelegate {
     }
     
     func setMaxIterations(_ it: Int) {
-        uniforms.maxIt = Int32(max(1, it))
+        let range = iterationSliderRange(interactive: !highQualityIdle)
+        let clamped = max(range.min, min(it, range.max))
+        uniforms.maxIt = Int32(max(1, clamped))
         refinePending = highQualityIdle
         needsRender = true
+        mtkViewRef?.setNeedsDisplay()
+    }
+    
+    /// Renderer’s suggested iterations for the current zoom/precision/SSAA.
+    func suggestedIterations(interactive: Bool) -> Int {
+        let it = suggestedIterations(
+            scalePPU: max(1.0, lastScalePPU),
+            interactive: interactive,
+            deepMode: uniforms.deepMode,
+            ssaaFactor: ssaaFactor
+        )
+        return it
+    }
+
+    /// Sensible UI range for the Iterations slider + default.
+    /// Bounds match the renderer’s internal clamps:
+    /// interactive: 80…6500, idle: 80…15000.
+    func iterationSliderRange(interactive: Bool) -> (min: Int, max: Int, `default`: Int) {
+        let minVal = 80
+        let maxVal = interactive ? 6500 : 15000
+        let def = suggestedIterations(interactive: interactive)
+        return (minVal, maxVal, def)
     }
     
     /// Deep Zoom is effectively always on now (DS mapping is enabled by threshold below).
@@ -424,6 +530,32 @@ final class MandelbrotRenderer: NSObject, MTKViewDelegate {
                                                 ])
             }
             ssaaAnchorZ = max(1.0, scalePixelsPerUnit)
+        }
+
+        // --- Iteration control ---
+        if autoIterationsEnabled {
+            // Auto-suggest with hysteresis (previous behavior)
+            let proposedIt = suggestedIterations(scalePPU: scalePixelsPerUnit,
+                                                 interactive: !highQualityIdle,
+                                                 deepMode: uniforms.deepMode,
+                                                 ssaaFactor: ssaaFactor)
+            let currentIt = Int(uniforms.maxIt)
+            if abs(currentIt - proposedIt) > max(50, Int(Double(max(1, currentIt)) * 0.12)) {
+                let range = iterationSliderRange(interactive: !highQualityIdle)
+                let clamped = max(range.min, min(proposedIt, range.max))
+                uniforms.maxIt = Int32(clamped)
+                refinePending = highQualityIdle
+                needsRender = true
+            }
+        } else {
+            // Manual mode: honor UI-provided maxIterations argument directly
+            let range = iterationSliderRange(interactive: !highQualityIdle)
+            let clamped = max(range.min, min(maxIterations, range.max))
+            if Int(uniforms.maxIt) != clamped {
+                uniforms.maxIt = Int32(clamped)
+                refinePending = highQualityIdle
+                needsRender = true
+            }
         }
 
         // Update lastScalePPU for next time
@@ -990,5 +1122,12 @@ extension MandelbrotRenderer {
     /// Read current contrast value (1.0 = neutral)
     func getContrast() -> Float {
         return uniforms.contrast
+    }
+}
+
+extension Comparable {
+    @inlinable
+    func clamped(to r: ClosedRange<Self>) -> Self {
+        return min(max(self, r.lowerBound), r.upperBound)
     }
 }
